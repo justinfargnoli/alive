@@ -4,7 +4,6 @@
 #include "llvm_util/utils.h"
 #include "ir/constant.h"
 #include "ir/function.h"
-#include "llvm/ADT/StringExtras.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/Function.h"
@@ -252,7 +251,7 @@ Value* get_operand(llvm::Value *v,
     if (cnst->getBitWidth() <= 64)
       c = make_unique<IntConst>(*ty, cnst->getZExtValue());
     else
-      c = make_unique<IntConst>(*ty, toString(cnst->getValue(), 10, false));
+      c = make_unique<IntConst>(*ty, cnst->getValue().toString(10, false));
     auto ret = c.get();
     current_fn->addConstant(move(c));
     RETURN_CACHE(ret);
@@ -274,7 +273,7 @@ Value* get_operand(llvm::Value *v,
       break;
     case FloatType::Quad:
       c = make_unique<FloatConst>(*ty,
-                                  toString(apfloat.bitcastToAPInt(), 10, true));
+                                  apfloat.bitcastToAPInt().toString(10, true));
       break;
     case FloatType::Unknown:
       UNREACHABLE();
