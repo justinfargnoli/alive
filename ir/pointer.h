@@ -119,8 +119,19 @@ public:
 
   static void resetGlobals();
 
+#if __cplusplus > 201703L
   auto operator<=>(const Pointer &rhs) const { return p <=> rhs.p; }
+#else
+//  bool operator==(const Pointer& rhs) const {
+//      return this->m == rhs.m
+//          && this->p == rhs.p;
+//  }
+//  bool operator!=(const Pointer& rhs) const {
+//      return !(*this == rhs);
+//  }
 
+  bool operator<(const Pointer& rhs) const;
+#endif
   friend std::ostream& operator<<(std::ostream &os, const Pointer &p);
 };
 

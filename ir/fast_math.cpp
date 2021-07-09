@@ -31,8 +31,40 @@ struct Node {
   expr rounding;
   unsigned flags = 0;
 
+#if __cplusplus > 201703L
   auto operator<=>(const Node &other) const = default;
-
+#else
+  bool operator==(const Node& rhs) const {
+      return this->operation == rhs.operation
+          && this->op1 == rhs.op1
+          && this->op2 == rhs.op2
+          && this->leaf == rhs.leaf
+          && this->rounding == rhs.rounding
+          && this->flags == rhs.flags;
+  }
+  bool operator!=(const Node& rhs) const {
+      return !(*this == rhs);
+  }
+  bool operator<(const Node& rhs)  const {
+    if (this->operation < rhs.operation) {
+      return true;
+    }
+    if (this->op1 < rhs.op1) {
+      return true;
+    }
+    if (this->op2 < rhs.op2) {
+      return true;
+    }
+    if (this->leaf < rhs.leaf) {
+      return true;
+    }
+    if (this->rounding < rhs.rounding) {
+      return true;
+    }
+    return (this->flags < rhs.flags);
+  }
+#endif
+  
 #ifdef DEBUG_FMF
   void print(ostream &os, EGraph &g) const;
 #endif
@@ -44,14 +76,16 @@ class EGraph {
   map<Node, unsigned> nodes;
 
   unsigned get(Node &&n) {
-    auto [I, inserted] = nodes.try_emplace(move(n), 0);
+    typename decltype(nodes)::iterator I;
+    bool inserted;
+    std::tie(I, inserted) = util::map_try_emplace(nodes, move(n), 0);
     if (inserted)
       I->second = uf.mk();
     return I->second;
   }
 
   void decl_equivalent(Node &&node, unsigned n1) {
-    unsigned n2 = nodes.try_emplace(move(node), n1).first->second;
+    unsigned n2 = util::map_try_emplace(nodes, move(node), n1).first->second;
     uf.merge(n1, n2);
   }
 
@@ -82,8 +116,8 @@ public:
         n.operation = Node::Div;
       } else if (e.isFPNeg(a)) {
         n.operation = Node::Neg;
-      } else if (auto name = e.fn_name(); !name.empty()) {
-        if (name == "reassoc") {
+      } else if (!e.fn_name().empty()) {
+        if (e.fn_name() == "reassoc") {
           n.flags |= FastMathFlags::Reassoc;
           e = e.getFnArg(0);
           continue;
@@ -108,7 +142,9 @@ public:
   void saturate() {
     while (true) {
       auto nodes_copy = nodes;
-      for (auto &[node, n] : nodes_copy) {
+      for (auto &node_val : nodes_copy) {
+        auto &node = std::get<0>(node_val);
+        auto &n = std::get<1>(node_val);
         // commutativity: x . y == y . x
         // Always correct for add & mul regardless of fast-math
         if (node.operation == Node::Add || node.operation == Node::Mul) {
@@ -137,11 +173,11 @@ public:
 #ifdef DEBUG_FMF
   friend ostream& operator<<(ostream &os, EGraph &g) {
     vector<vector<const Node*>> sorted;
-    for (auto &[node, n] : g.nodes) {
-      unsigned r = g.root(n);
+    for (auto &node : g.nodes) {
+      unsigned r = g.root(node.second);
       if (r >= sorted.size())
         sorted.resize(r + 1);
-      sorted[r].emplace_back(&node);
+      sorted[r].emplace_back(&node.first);
     }
 
     for (unsigned i = 0, e = sorted.size(); i != e; ++i) {

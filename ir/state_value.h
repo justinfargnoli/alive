@@ -22,6 +22,7 @@ struct StateValue {
 
   auto bits() const { return value.bits(); }
 
+  smt::expr cmp_eq(const StateValue &other) const;
   StateValue zext(unsigned amount) const;
   StateValue trunc(unsigned bw_val, unsigned bw_np) const;
   StateValue zextOrTrunc(unsigned tobw) const;
@@ -29,15 +30,30 @@ struct StateValue {
 
   bool isValid() const;
 
-  smt::expr operator==(const StateValue &other) const;
+//  smt::expr operator==(const StateValue &other) const;
   bool eq(const StateValue &other) const;
 
   std::set<smt::expr> vars() const;
   StateValue
     subst(const std::vector<std::pair<smt::expr, smt::expr>> &repls) const;
 
+#if __cplusplus > 201703L
   auto operator<=>(const StateValue &rhs) const = default;
-
+#else
+  bool operator==(const StateValue& rhs) const {
+    return this->value == rhs.value
+        && this->non_poison == rhs.non_poison;
+  }
+  bool operator!=(const StateValue& rhs) const {
+      return !(*this == rhs);
+  }
+  bool operator<(const StateValue& rhs) const {
+    if (this->value < rhs.value) {
+      return true;
+    }
+    return this->non_poison < rhs.non_poison;
+  }
+#endif
   friend std::ostream& operator<<(std::ostream &os, const StateValue &val);
 };
 

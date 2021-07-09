@@ -287,11 +287,11 @@ expr Pointer::inbounds(bool simplify_ptr, bool strict) {
     return ::inbounds(*this, strict);
 
   DisjointExpr<expr> ret(expr(false)), all_ptrs;
-  for (auto &[ptr_expr, domain] : DisjointExpr<expr>(p, 3)) {
-    expr inb = ::inbounds(Pointer(m, ptr_expr), strict);
+  for (auto &t : DisjointExpr<expr>(p, 3)) {
+    expr inb = ::inbounds(Pointer(m, t.first), strict);
     if (!inb.isFalse())
-      all_ptrs.add(ptr_expr, domain);
-    ret.add(move(inb), domain);
+      all_ptrs.add(t.first, t.second);
+    ret.add(move(inb), t.second);
   }
 
   // trim set of valid ptrs
@@ -383,17 +383,16 @@ AndExpr Pointer::isDereferenceable(const expr &bytes0, unsigned align,
   expr bytes = bytes0.zextOrTrunc(bits_size_t);
   DisjointExpr<expr> UB(expr(false)), is_aligned(expr(false)), all_ptrs;
 
-  for (auto &[ptr_expr, domain] : DisjointExpr<expr>(p, 3)) {
-    Pointer ptr(m, ptr_expr);
-    auto [ub, aligned] = ::is_dereferenceable(ptr, bytes_off, bytes, align,
-                                              iswrite);
+  for (auto &t : DisjointExpr<expr>(p, 3)) {
+    Pointer ptr(m, t.first);
+    auto u = ::is_dereferenceable(ptr, bytes_off, bytes, align, iswrite);
 
     // record pointer if not definitely unfeasible
-    if (!ub.isFalse() && !aligned.isFalse() && !ptr.blockSize().isZero())
-      all_ptrs.add(ptr.release(), domain);
+    if (!u.first.isFalse() && !u.second.isFalse() && !ptr.blockSize().isZero())
+      all_ptrs.add(ptr.release(), t.second);
 
-    UB.add(move(ub), domain);
-    is_aligned.add(move(aligned), domain);
+    UB.add(move(u.first), t.second);
+    is_aligned.add(move(u.second), t.second);
   }
 
   AndExpr exprs;
@@ -426,8 +425,8 @@ void Pointer::isDisjointOrEqual(const expr &len1, const Pointer &ptr2,
   auto off = getOffsetSizet();
   auto off2 = ptr2.getOffsetSizet();
   unsigned bits = off.bits();
-  m.state->addUB(getBid() != ptr2.getBid() ||
-                 off == off2 ||
+  m.state->addUB(getBid().cmp_neq(ptr2.getBid(), true) ||
+                 off.cmp_eq(off2, true) ||
                  disjoint(off, len1.zextOrTrunc(bits), off2,
                           len2.zextOrTrunc(bits)));
 }
@@ -500,7 +499,7 @@ expr Pointer::fninputRefined(const Pointer &other, set<expr> &undef,
                                          off2.ugt(size2) && off == off2 &&
                                            size2.uge(size)),
                             // maintains same dereferenceability before/after
-                            off == off2 && size2.uge(size)));
+                            off.cmp_eq(off2, true) && size2.uge(size)));
   local = (other.isLocal() || other.isByval()) && local;
 
   // TODO: this induces an infinite loop
@@ -598,4 +597,11 @@ ostream& operator<<(ostream &os, const Pointer &p) {
   return os << ')';
 }
 
+}
+
+bool Pointer::operator<(const Pointer& rhs) const {
+  if (this->m < rhs.m) {
+    return true;
+  }
+  return this->p < rhs.p;
 }

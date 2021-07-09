@@ -192,8 +192,10 @@ void CmpPred::print(ostream &os) const {
 }
 
 expr CmpPred::toSMT(State &s) const {
-  auto &[a, ap] = s[lhs];
-  auto &[b, bp] = s[rhs];
+  expr a = s[lhs].value;
+  expr ap = s[lhs].non_poison;
+  expr b = s[rhs].value;
+  expr bp = s[rhs].non_poison;
   expr r;
   switch (pred) {
   case EQ:  r = a == b; break;

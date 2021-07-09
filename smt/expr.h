@@ -247,8 +247,9 @@ public:
   expr operator~() const;
 
   expr cmp_eq(const expr &rhs, bool simplify) const; // same as operator==
-  expr operator==(const expr &rhs) const;
-  expr operator!=(const expr &rhs) const;
+  expr cmp_neq(const expr &rhs, bool simplify) const; // same as operator!=
+//  expr operator==(const expr &rhs) const;
+//  expr operator!=(const expr &rhs) const;
 
   expr operator&&(const expr &rhs) const;
   expr operator||(const expr &rhs) const;
@@ -344,7 +345,16 @@ public:
   friend std::ostream &operator<<(std::ostream &os, const expr &e);
 
   // for container use only
-  std::strong_ordering operator<=>(const expr &rhs) const;
+#if __cplusplus > 201703L
+  std::weak_ordering operator<=>(const expr &rhs) const;
+#else
+  bool operator==(const expr &rhs) const;
+  bool operator!=(const expr &rhs) const;
+  bool operator<(const expr &rhs) const;
+  bool operator>(const expr &rhs) const;
+  bool operator<=(const expr &rhs) const;
+  bool operator>=(const expr &rhs) const;
+#endif
   unsigned id() const;
   unsigned hash() const;
 

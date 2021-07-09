@@ -4,10 +4,10 @@
 // Distributed under the MIT license that can be found in the LICENSE file.
 
 #include "ir/value.h"
+#include "util/optional.h"
 #include <string>
 #include <string_view>
 #include <utility>
-#include <variant>
 #include <vector>
 
 namespace IR {
@@ -20,19 +20,23 @@ public:
 
 
 class IntConst final : public Constant {
-  std::variant<int64_t, std::string> val;
+  util::optional<int64_t> i;
+  util::optional<std::string> s;
 
 public:
   IntConst(Type &type, int64_t val);
   IntConst(Type &type, std::string &&val);
   StateValue toSMT(State &s) const override;
   smt::expr getTypeConstraints() const override;
-  auto getInt() const { return std::get_if<int64_t>(&val); }
+  const int64_t *getInt() const { return i.getPointer(); }
 };
 
 
 class FloatConst final : public Constant {
-  std::variant<double, uint64_t, std::string> val;
+  util::optional<double> d;
+  util::optional<int64_t> i;
+  util::optional<std::string> s;
+
 public:
   FloatConst(Type &type, double val);
   FloatConst(Type &type, uint64_t val);
@@ -82,6 +86,6 @@ struct ConstantFnException {
   ConstantFnException(std::string &&str) : str(std::move(str)) {}
 };
 
-std::optional<int64_t> getInt(const IR::Value &val);
+util::optional<int64_t> getInt(const IR::Value &val);
 uint64_t getIntOr(const IR::Value &val, uint64_t default_value);
 }

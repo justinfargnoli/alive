@@ -656,6 +656,7 @@ void Memory::AliasSet::print(ostream &os) const {
     os << "(empty)";
 }
 
+#if __cplusplus > 202002L
 weak_ordering Memory::MemBlock::operator<=>(const MemBlock &rhs) const {
   // FIXME:
   // 1) xcode doesn't have tuple::operator<=>
@@ -665,7 +666,7 @@ weak_ordering Memory::MemBlock::operator<=>(const MemBlock &rhs) const {
   if (auto cmp = type  <=> rhs.type;  is_neq(cmp)) return cmp;
   return weak_ordering::equivalent;
 }
-
+#endif
 
 static set<Pointer> all_leaf_ptrs(const Memory &m, const expr &ptr) {
   set<Pointer> ptrs;
@@ -673,7 +674,7 @@ static set<Pointer> all_leaf_ptrs(const Memory &m, const expr &ptr) {
     Pointer p(m, ptr_val);
     auto offset = p.getOffset();
     for (auto &bid : p.getBid().leafs()) {
-      ptrs.emplace(m, bid, offset);
+      ptrs.emplace(m, bid, offset, ParamAttrs{});
     }
   }
   return ptrs;
@@ -895,8 +896,8 @@ Memory::DataType Memory::data_type(const vector<pair<unsigned, expr>> &data,
                                    bool full_store) const {
   unsigned ty = DATA_NONE;
   unsigned num_int_zeros = 0;
-  for (auto &[idx, val] : data) {
-    Byte byte(*this, expr(val));
+  for (auto &t : data) {
+    Byte byte(*this, expr(t.second));
     auto is_ptr = byte.isPtr();
     if (!is_ptr.isFalse())
       ty |= DATA_PTR;
@@ -922,7 +923,8 @@ void Memory::store(const Pointer &ptr,
   if (data.empty())
     return;
 
-  for (auto &[offset, val] : data) {
+  for (auto &t : data) {
+    const auto &val = std::get<1>(t);
     Byte byte(*this, expr(val));
     // TODO: check impact of !byte.isPtr().isFalse()
     if (byte.isPtr().isTrue())
@@ -957,12 +959,12 @@ void Memory::store(const Pointer &ptr,
       blk.type |= stored_ty;
     }
 
-    for (auto &[idx, val] : data) {
-      if (full_write && val.eq(data[0].second))
+    for (auto &t : data) {
+      if (full_write && t.second.eq(data[0].second))
         continue;
       expr off
-       = offset + expr::mkUInt(idx >> Pointer::zeroBitsShortOffset(), off_bits);
-      mem = mem.store(off, val);
+       = offset + expr::mkUInt(t.first >> Pointer::zeroBitsShortOffset(), off_bits);
+      mem = mem.store(off, t.second);
     }
     blk.val = expr::mkIf(cond, mem, blk.val);
     blk.undef.insert(undef.begin(), undef.end());
@@ -1095,7 +1097,7 @@ Memory::Memory(State &state) : state(&state), escaped_local_blks(*this) {
 
   // Initialize a memory block for null pointer.
   if (has_null_block)
-    alloc(expr::mkUInt(0, bits_size_t), bits_byte / 8, GLOBAL, false, false, 0);
+    alloc(expr::mkUInt(0, bits_size_t), bits_byte / 8, GLOBAL, false, false, util::optional<unsigned>{0});
 }
 
 void Memory::mkAxioms(const Memory &tgt) const {
@@ -1235,10 +1237,10 @@ pair<expr, expr> Memory::mkUndefInput(const ParamAttrs &attrs) const {
   return { p.release(), move(undef) };
 }
 
-expr Memory::PtrInput::operator==(const PtrInput &rhs) const {
+expr Memory::PtrInput::cmp_eq(const PtrInput &rhs) const {
   if (byval != rhs.byval || nocapture != rhs.nocapture)
     return false;
-  return val == rhs.val;
+  return val.cmp_eq(rhs.val);
 }
 
 expr Memory::mkFnRet(const char *name, const vector<PtrInput> &ptr_inputs) {
@@ -1285,7 +1287,7 @@ Memory::CallState Memory::CallState::mkIf(const expr &cond,
   return ret;
 }
 
-expr Memory::CallState::operator==(const CallState &rhs) const {
+expr Memory::CallState::cmp_eq(const CallState &rhs) const {
   if (empty != rhs.empty)
     return false;
   if (empty)
@@ -1297,6 +1299,19 @@ expr Memory::CallState::operator==(const CallState &rhs) const {
   }
   return ret;
 }
+
+//expr Memory::CallState::operator==(const CallState &rhs) const {
+//  if (empty != rhs.empty)
+//    return false;
+//  if (empty)
+//    return true;
+//
+//  expr ret = non_local_liveness == rhs.non_local_liveness;
+//  for (unsigned i = 0, e = non_local_block_val.size(); i != e; ++i) {
+//    ret &= non_local_block_val[i] == rhs.non_local_block_val[i];
+//  }
+//  return ret;
+//}
 
 Memory::CallState
 Memory::mkCallState(const string &fnname, const vector<PtrInput> *ptr_inputs,
@@ -1379,8 +1394,8 @@ static expr disjoint_local_blocks(const Memory &m, const expr &addr,
 
   // Disjointness of block's address range with other local blocks
   auto zero = expr::mkUInt(0, bits_for_offset);
-  for (auto &[sbid, addr0] : blk_addr) {
-    Pointer p2(m, Pointer::mkLongBid(sbid, true), zero);
+  for (auto &t : blk_addr) {
+    Pointer p2(m, Pointer::mkLongBid(t.first, true), zero);
     disj &= p2.isBlockAlive()
               .implies(disjoint(addr, sz, align, p2.getAddress(),
                                 p2.blockSize().zextOrTrunc(bits_ptr_address),
@@ -1465,7 +1480,7 @@ Memory::alloc(const expr &size, unsigned align, BlockKind blockKind,
       local_blk_addr.add(short_bid, move(blk_addr));
     }
   } else {
-    state->addAxiom(p.blockSize() == size_zext);
+    state->addAxiom(p.blockSize().cmp_eq(size_zext, true));
     state->addAxiom(p.isBlockAligned(align, true));
     if (!is_null)
       state->addAxiom(p.getAllocType() == alloc_ty);
@@ -1476,7 +1491,7 @@ Memory::alloc(const expr &size, unsigned align, BlockKind blockKind,
       if (size.ule(align).isTrue()) {
         expr msb = addr.extract(bits_ptr_address - 1 - Pointer::hasLocalBit(),
                                 align_bits);
-        state->addAxiom(msb != expr::mkInt(-1, msb));
+        state->addAxiom(msb.cmp_neq(expr::mkInt(-1, msb), true));
       }
     }
 
@@ -1607,7 +1622,7 @@ StateValue Memory::load(const Pointer &ptr, const Type &type, set<expr> &undef,
       }
 
       auto ptr_i = ptr + byteofs;
-      auto align_i = gcd(align, byteofs % align);
+      auto align_i = util::gcd((long)align, (long)byteofs % align);
       member_vals.emplace_back(load(ptr_i, aty->getChild(i), undef, align_i));
       byteofs += getStoreByteSize(aty->getChild(i));
     }
@@ -1628,7 +1643,9 @@ StateValue Memory::load(const Pointer &ptr, const Type &type, set<expr> &undef,
       auto islocal = p.isLocal();
       auto bid = p.getShortBid();
       if (!islocal.isTrue() && !bid.isConst()) {
-        auto [I, inserted] = ptr_alias.try_emplace(p.getBid(), *this);
+        typename decltype(ptr_alias)::iterator I;
+        bool inserted;
+        std::tie(I, inserted) = util::map_try_emplace(ptr_alias, p.getBid(), *this);
         if (inserted) {
           if (!max_bid)
             max_bid = nextNonlocalBid();
@@ -1749,7 +1766,7 @@ void Memory::copy(const Pointer &src, const Pointer &dst) {
   dst_blk.type = DATA_NONE;
 
   auto offset = expr::mkUInt(0, Pointer::bitsShortOffset());
-  DisjointExpr val(expr::mkConstArray(offset, Byte::mkPoisonByte(*this)()));
+  DisjointExpr<expr> val(expr::mkConstArray(offset, Byte::mkPoisonByte(*this)()));
 
   auto fn = [&](MemBlock &blk, unsigned bid, bool local, expr &&cond) {
     // we assume src != dst
@@ -1833,7 +1850,7 @@ expr Memory::blockRefined(const Pointer &src, const Pointer &tgt, unsigned bid,
     for (unsigned off = 0; off < (bytes / bytes_per_byte); ++off) {
       expr off_expr = expr::mkUInt(off, Pointer::bitsShortOffset());
       val_refines
-        &= (ptr_offset == off_expr).implies(
+        &= (ptr_offset.cmp_eq(off_expr, true)).implies(
              blockValRefined(tgt.getMemory(), bid, false, off_expr, undef));
     }
   } else {
@@ -1852,9 +1869,9 @@ expr Memory::blockRefined(const Pointer &src, const Pointer &tgt, unsigned bid,
     aligned = src_align.ule(tgt_align);
 
   expr alive = src.isBlockAlive();
-  return alive == tgt.isBlockAlive() &&
-         blk_size == tgt.blockSize() &&
-         src.getAllocType() == tgt.getAllocType() &&
+  return alive.cmp_eq(tgt.isBlockAlive(), true) &&
+         blk_size.cmp_eq(tgt.blockSize(), true) &&
+         src.getAllocType().cmp_eq(tgt.getAllocType(), true) &&
          aligned &&
          alive.implies(val_refines);
 }
@@ -1887,7 +1904,7 @@ Memory::refined(const Memory &other, bool skip_constants,
     Pointer q(other, p());
     if (p.isByval().isTrue() && q.isByval().isTrue())
       continue;
-    ret &= (ptr_bid == bid_expr).implies(blockRefined(p, q, bid, undef_vars));
+    ret &= (ptr_bid.cmp_eq(bid_expr, true)).implies(blockRefined(p, q, bid, undef_vars));
   }
 
   // restrict refinement check to set of request blocks
@@ -1978,10 +1995,12 @@ Memory Memory::mkIf(const expr &cond, const Memory &then, const Memory &els) {
   assert(then.byval_blks == els.byval_blks);
   ret.escaped_local_blks.unionWith(els.escaped_local_blks);
 
-  for (const auto &[expr, alias] : els.ptr_alias) {
-    auto [I, inserted] = ret.ptr_alias.try_emplace(expr, alias);
+  for (const auto &t : els.ptr_alias) {
+    typename decltype(ret.ptr_alias)::iterator I;
+    bool inserted;
+    std::tie(I, inserted) = map_try_emplace(ret.ptr_alias, t.first, t.second);
     if (!inserted)
-      I->second.unionWith(alias);
+      I->second.unionWith(t.second);
   }
 
   ret.next_nonlocal_bid = max(then.next_nonlocal_bid, els.next_nonlocal_bid);
@@ -2068,9 +2087,9 @@ ostream& operator<<(ostream &os, const Memory &m) {
   }
   if (!m.ptr_alias.empty()) {
     os << "\nALIAS SETS:\n";
-    for (auto &[bid, alias] : m.ptr_alias) {
-      os << bid << ": ";
-      alias.print(os);
+    for (auto &t : m.ptr_alias) {
+      os << t.first << ": ";
+      t.second.print(os);
       os << '\n';
     }
   }

@@ -77,7 +77,7 @@ static bool is_power2(const expr &e, unsigned &log) {
 namespace smt {
 
 expr::expr(Z3_ast ast) : ptr((uintptr_t)ast) {
-  static_assert(sizeof(Z3_ast) == sizeof(uintptr_t));
+  static_assert(sizeof(Z3_ast) == sizeof(uintptr_t), "");
   assert(isZ3Ast() && isValid());
   incRef();
 #if DEBUG_Z3_RC
@@ -558,7 +558,7 @@ unsigned expr::min_leading_zeros() const {
   if (isConcat(a, b)) {
     return a.min_leading_zeros();
   } else if (isUInt(n)) {
-    return countl_zero(n) - (64 - bits());
+    return __builtin_clz(n) - (64 - bits());
   }
   return 0;
 }
@@ -1138,8 +1138,8 @@ expr expr::operator&(const expr &rhs) const {
     if (!a.isUInt(n) || n == 0 || n == numeric_limits<uint64_t>::max())
       return expr();
 
-    auto lead  = countl_zero(n);
-    auto trail = countr_zero(n);
+    auto lead  = __builtin_clz(n);
+    auto trail = __builtin_clz(n);
 
     if (!is_power2((n >> trail) + 1))
       return expr();
@@ -1154,19 +1154,24 @@ expr expr::operator&(const expr &rhs) const {
   };
 
   if (bits() <= 64) {
-    if (auto f = fold_extract(*this, rhs);
-        f.isValid())
-      return f;
-    if (auto f = fold_extract(rhs, *this);
-        f.isValid())
-      return f;
-
+    {
+      auto f = fold_extract(*this, rhs);
+      if (f.isValid())
+        return f;
+    }
+    {
+      auto f = fold_extract(rhs, *this);
+      if (f.isValid())
+        return f;
+    }
     if (bits() == 1) {
-      if (auto a = get_bool(*this);
-          a.isValid())
-        if(auto b = get_bool(rhs);
-           b.isValid())
+      auto a = get_bool(*this);
+      if (a.isValid()) {
+        auto b = get_bool(rhs);
+        if (b.isValid()) {
           return (a && b).toBVBool();
+        }
+      }
     }
   }
   return binopc(Z3_mk_bvand, operator&, Z3_OP_BAND, isAllOnes, isZero);
@@ -1179,11 +1184,13 @@ expr expr::operator|(const expr &rhs) const {
     return rhs;
 
   if (bits() == 1) {
-    if (auto a = get_bool(*this);
-        a.isValid())
-      if (auto b = get_bool(rhs);
-        b.isValid())
+    auto a = get_bool(*this);
+    if (a.isValid()) {
+      auto b = get_bool(rhs);
+      if (b.isValid()) {
         return (a || b).toBVBool();
+      }
+    }
   }
 
   return binopc(Z3_mk_bvor, operator|, Z3_OP_BOR, isZero, isAllOnes);
@@ -1262,51 +1269,55 @@ expr expr::cmp_eq(const expr &rhs, bool simplify) const {
       for (unsigned i = 0; i < num_args; ++i) {
         expr arg = Z3_get_app_arg(ctx(), app, i);
         unsigned low = high - arg.bits();
-        eqs.add(arg == rhs.extract(high - 1, low));
+        eqs.add(arg.cmp_eq(rhs.extract(high - 1, low), true));
         high = low;
       }
       return eqs();
     }
 
-    // (concat ..) == (concat ..)
-    if (auto app_rhs = rhs.isAppOf(Z3_OP_CONCAT);
-        app_rhs != nullptr &&
-        num_args == Z3_get_app_num_args(ctx(), app_rhs)) {
-      AndExpr eqs;
-      bool all_aligned = true;
-      unsigned l_idx = 0, r_idx = 0;
-      for (unsigned i = 0; i < num_args; ++i) {
-        expr lhs = Z3_get_app_arg(ctx(), app, i);
-        expr rhs = Z3_get_app_arg(ctx(), app_rhs, i);
-        unsigned l_bits = lhs.bits();
-        unsigned r_bits = rhs.bits();
-        all_aligned &= l_bits == r_bits;
+    {
+      // (concat ..) == (concat ..)
+      auto app_rhs = rhs.isAppOf(Z3_OP_CONCAT);
+      if (app_rhs != nullptr &&
+          num_args == Z3_get_app_num_args(ctx(), app_rhs)) {
+        AndExpr eqs;
+        bool all_aligned = true;
+        unsigned l_idx = 0, r_idx = 0;
+        for (unsigned i = 0; i < num_args; ++i) {
+          expr lhs = Z3_get_app_arg(ctx(), app, i);
+          expr rhs = Z3_get_app_arg(ctx(), app_rhs, i);
+          unsigned l_bits = lhs.bits();
+          unsigned r_bits = rhs.bits();
+          all_aligned &= l_bits == r_bits;
 
-        if (l_idx == r_idx && l_bits == r_bits) {
-          eqs.add(lhs == rhs);
-        }
-        // even if the concats aren't aligned, we still compare the constant
-        // bits in an attempt to prove the comparison false
-        else if (lhs.isConst() && rhs.isConst()) {
-          // r .. l .. r+sz
-          if (l_idx >= r_idx && l_idx < (r_idx + r_bits)) {
-            unsigned overlap = min(r_bits - (l_idx - r_idx), l_bits);
-            eqs.add(lhs.extract(l_bits-1, l_bits - overlap) ==
-                    rhs.extract(overlap-1, 0));
+          if (l_idx == r_idx && l_bits == r_bits) {
+            eqs.add(lhs.cmp_eq(rhs, true));
           }
-          else if (r_idx >= l_idx && r_idx < (l_idx + l_bits)) {
-            unsigned overlap = min(l_bits - (r_idx - l_idx), r_bits);
-            eqs.add(lhs.extract(overlap-1, 0) ==
-                    rhs.extract(r_bits-1, r_bits - overlap));
+          // even if the concats aren't aligned, we still compare the constant
+          // bits in an attempt to prove the comparison false
+          else if (lhs.isConst() && rhs.isConst()) {
+            // r .. l .. r+sz
+            if (l_idx >= r_idx && l_idx < (r_idx + r_bits)) {
+              unsigned overlap = min(r_bits - (l_idx - r_idx), l_bits);
+              eqs.add(lhs
+                      .extract(l_bits-1, l_bits - overlap)
+                      .cmp_eq(rhs.extract(overlap-1, 0), true));
+            }
+            else if (r_idx >= l_idx && r_idx < (l_idx + l_bits)) {
+              unsigned overlap = min(l_bits - (r_idx - l_idx), r_bits);
+              eqs.add(lhs
+                      .extract(overlap-1, 0)
+                      .cmp_eq(rhs.extract(r_bits-1, r_bits - overlap), true));
+            }
           }
+          l_idx += l_bits;
+          r_idx += r_bits;
         }
-        l_idx += l_bits;
-        r_idx += r_bits;
+        assert(l_idx == r_idx);
+
+        if (all_aligned || !eqs)
+          return eqs();
       }
-      assert(l_idx == r_idx);
-
-      if (all_aligned || !eqs)
-        return eqs();
     }
   }
 
@@ -1359,12 +1370,36 @@ end:
   return binop_commutative(rhs, Z3_mk_eq);
 }
 
-expr expr::operator==(const expr &rhs) const {
-  return cmp_eq(rhs, true);
+expr expr::cmp_neq(const expr &rhs, bool simplify) const {
+  return !this->cmp_eq(rhs, simplify);
 }
 
-expr expr::operator!=(const expr &rhs) const {
+//expr expr::operator==(const expr &rhs) const {
+//  return cmp_eq(rhs, true);
+//}
+//
+//expr expr::operator!=(const expr &rhs) const {
+//  return !(*this == rhs);
+//}
+
+bool expr::operator==(const expr &rhs) const {
+  return eq(rhs);
+}
+bool expr::operator!=(const expr &rhs) const {
   return !(*this == rhs);
+}
+bool expr::operator<(const expr &rhs) const {
+  C(rhs);
+  return ast() < rhs();
+}
+bool expr::operator>(const expr &rhs) const {
+  return !(*this <= rhs);
+}
+bool expr::operator<=(const expr &rhs) const {
+  return !(*this > rhs);
+}
+bool expr::operator>=(const expr &rhs) const {
+  return !(*this < rhs);
 }
 
 expr expr::operator&&(const expr &rhs) const {
@@ -1669,10 +1704,16 @@ expr expr::extract(unsigned high, unsigned low, unsigned depth) const {
       }
       return expr();
     };
-    if (auto ret = simpl_bitwise(Z3_OP_BAND, &expr::isZero); ret.isValid())
-      return ret;
-    if (auto ret = simpl_bitwise(Z3_OP_BOR, &expr::isAllOnes); ret.isValid())
-      return ret;
+    {
+      auto ret = simpl_bitwise(Z3_OP_BAND, &expr::isZero);
+      if (ret.isValid())
+        return ret;
+    }
+    {
+      auto ret = simpl_bitwise(Z3_OP_BOR, &expr::isAllOnes);
+      if (ret.isValid())
+        return ret;
+    }
   }
 end:
   return simplify_const(Z3_mk_extract(ctx(), high, low, ast()), *this);
@@ -1771,7 +1812,7 @@ expr expr::store(const expr &idx, const expr &val) const {
   C(idx, val);
   expr array, str_idx, str_val;
   if (isStore(array, str_idx, str_val)) {
-    if ((idx == str_idx).isTrue())
+    if ((idx.cmp_eq(str_idx, true)).isTrue())
       return array.store(idx, val);
 
   } else if (isConstArray(str_val)) {
@@ -2044,12 +2085,14 @@ ostream& operator<<(ostream &os, const expr &e) {
   return os << (e.isValid() ? Z3_ast_to_string(ctx(), e()) : "(null)");
 }
 
+#if __cplusplus > 201703L
 strong_ordering expr::operator<=>(const expr &rhs) const {
   if (ptr == rhs.ptr || !isValid() || !rhs.isValid())
     return ptr <=> rhs.ptr;
   // so iterators are stable
   return id() <=> rhs.id();
 }
+#endif
 
 unsigned expr::id() const {
   return Z3_get_ast_id(ctx(), ast());

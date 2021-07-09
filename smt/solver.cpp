@@ -6,6 +6,7 @@
 #include "util/compiler.h"
 #include "util/config.h"
 #include "util/file.h"
+#include "util/optional.h"
 #include <cassert>
 #include <fstream>
 #include <iomanip>
@@ -77,6 +78,11 @@ class MultiTactic final : public Tactic {
   Z3_goal goal = nullptr;
 
 public:
+  MultiTactic(MultiTactic &&other) : Tactic(std::move(other)) {
+    swap(tactics, other.tactics);
+    swap(goal, other.goal);
+  }
+
   MultiTactic(initializer_list<const char*> ts) : Tactic("skip") {
     if (tactic_verbose) {
       goal = Z3_mk_goal(ctx(), true, false, false);
@@ -151,7 +157,7 @@ public:
 };
 }
 
-static optional<MultiTactic> tactic;
+static util::optional<MultiTactic> tactic;
 
 
 namespace smt {
@@ -246,8 +252,8 @@ void Solver::add(const expr &e) {
 
 void Solver::block(const Model &m, Solver *sneg) {
   set<expr> assignments;
-  for (const auto &[var, val] : m) {
-    assignments.insert(var == val);
+  for (const auto &t : m) {
+    assignments.insert(t.first.cmp_eq(t.second, true));
   }
 
   if (sneg) {
@@ -392,7 +398,7 @@ EnableSMTQueriesTMP::~EnableSMTQueriesTMP() {
 
 
 void solver_init() {
-  tactic.emplace({
+  tactic.emplace(MultiTactic{
     "simplify",
     "propagate-values",
     "simplify",
