@@ -137,7 +137,7 @@ void Function::fixupTypes(const Model &m) {
 
 BasicBlock& Function::getBB(string_view name, bool push_front) {
   assert(name != "#sink");
-  auto p = BBs.try_emplace(string(name), name);
+  auto p = BBs.emplace(string(name), name);
   if (p.second) {
     if (push_front)
       BB_order.insert(BB_order.begin(), &p.first->second);
@@ -409,9 +409,9 @@ cloneBB(Function &F, const BasicBlock &BB, const char *suffix,
   for (auto *phi : newbb.phis()) {
     for (auto &src : phi->sources()) {
       bool replaced = false;
-      for (auto &[bb, copies] : bbmap) {
-        if (src == bb->getName()) {
-          phi->replaceSourceWith(src, copies.back()->getName());
+      for (auto &t : bbmap) {
+        if (src == t.first->getName()) {
+          phi->replaceSourceWith(src, t.second.back()->getName());
           replaced = true;
           break;
         }
@@ -428,12 +428,12 @@ cloneBB(Function &F, const BasicBlock &BB, const char *suffix,
     //   ...
     //   br loop
     if (phi->getValues().empty()) {
-      for (auto &[val, copies] : vmap) {
-        if (copies.back().second == phi) {
-          newbb.rauw(*phi, *const_cast<Value*>(val));
-          copies.pop_back();
-          if (copies.empty())
-            vmap.erase(val);
+      for (auto &t : vmap) {
+        if (t.second.back().second == phi) {
+          newbb.rauw(*phi, *const_cast<Value*>(t.first));
+          t.second.pop_back();
+          if (t.second.empty())
+            vmap.erase(t.first);
           break;
         }
       }
@@ -448,8 +448,8 @@ static auto getPhiPredecessors(const Function &F) {
   unordered_map<string, vector<pair<Phi*, Value*>>> map;
   for (auto &i : F.instrs()) {
     if (auto phi = dynamic_cast<const Phi*>(&i)) {
-      for (auto &[val, pred] : phi->getValues()) {
-        map[pred].emplace_back(const_cast<Phi*>(phi), const_cast<Value*>(val));
+      for (auto &t : phi->getValues()) {
+        map[t.second].emplace_back(const_cast<Phi*>(phi), const_cast<Value*>(t.first));
       }
     }
   }
@@ -483,7 +483,10 @@ void Function::unroll(unsigned k) {
 
   // traverse each loop tree in post-order
   while (!worklist.empty()) {
-    auto [header, height, flag] = worklist.back();
+    BasicBlock *header;
+    unsigned height;
+    bool flag;
+    std::tie(header, height, flag) = worklist.back();
     if (!flag) {
       get<2>(worklist.back()) = flag = true;
       auto I = forest.find(header);
@@ -558,7 +561,8 @@ void Function::unroll(unsigned k) {
     }
 
     // Patch jump targets
-    for (auto &[bb, copies] : bbmap) {
+    for (auto &bb_val : bbmap) {
+      auto &copies = std::get<1>(bb_val);
       for (unsigned unroll = 0, e = copies.size(); unroll < e; ++unroll) {
         auto *cloned = copies[unroll];
         for (auto &tgt : cloned->targets()) {
@@ -601,14 +605,18 @@ void Function::unroll(unsigned k) {
     };
 
     // patch users outside of the loop
-    for (auto &[val, copies] : vmap) {
+    for (auto &ventry : vmap) {
+      auto &val = std::get<0>(ventry);
+      auto &copies = std::get<1>(ventry);
       auto I = users.find(val);
       if (I == users.end())
         continue;
 
       BasicBlock *bb_val = bb_of(val);
 
-      for (auto &[user, user_bb] : I->second) {
+      for (auto &use : I->second) {
+        auto &user = std::get<0>(use);
+        auto &user_bb = std::get<1>(use);
         // users inside the loop have been patched already
         if (bbmap.count(user_bb))
           continue;
@@ -617,12 +625,14 @@ void Function::unroll(unsigned k) {
         set<pair<BasicBlock*, Phi*>> added_phis;
         Phi *first_added_phi = nullptr;
 
-        for (auto &[exit, dst] : exit_edges) {
+        for (auto &edge : exit_edges) {
+          auto &exit = std::get<0>(edge);
+          auto &dst = std::get<1>(edge);
           if (!dom_tree.dominates(bb_val, exit))
             continue;
 
-          if (auto phi = dynamic_cast<Phi*>(user);
-              phi && user_bb == dst) {
+          auto phi = dynamic_cast<Phi*>(user);
+          if (phi && user_bb == dst) {
             // Check if the phi uses this value through this predecessor
             auto &vals = phi->getValues();
             auto *used_val = val;
@@ -635,10 +645,10 @@ void Function::unroll(unsigned k) {
 
             auto &exit_copies = bbmap.at(exit);
             auto exit_I = exit_copies.begin(), exit_E = exit_copies.end();
-            for (auto &[bb, val] : copies) {
+            for (auto &copy : copies) {
               if (++exit_I == exit_E)
                 break;
-              phi->addValue(*val, string((*exit_I)->getName()));
+              phi->addValue(*copy.second, string((*exit_I)->getName()));
             }
             continue;
           }
@@ -660,19 +670,19 @@ void Function::unroll(unsigned k) {
             newphi->addValue(*const_cast<Value*>(val), string(exit->getName()));
             auto &bb_dups = bbmap.at(exit);
             auto bb_I = bb_dups.begin(), bb_E = bb_dups.end();
-            for (auto &[_, val] : copies) {
+            for (auto &copy : copies) {
               if (++bb_I == bb_E)
                 break;
-              newphi->addValue(*val, string((*bb_I)->getName()));
+              newphi->addValue(*copy.second, string((*bb_I)->getName()));
             }
           }
 
           auto *i = dynamic_cast<Instr*>(user);
           assert(i);
           if (auto phi = dynamic_cast<Phi*>(i)) {
-            for (auto &[pv, pred] : phi->getValues()) {
-              if (pv == val && dom_tree.dominates(dst, &getBB(pred))){
-                phi->replace(pred, *newphi);
+            for (auto &phi_val : phi->getValues()) {
+              if (phi_val.first == val && dom_tree.dominates(dst, &getBB(phi_val.second))){
+                phi->replace(phi_val.second, *newphi);
               }
             }
           } else {
@@ -706,8 +716,8 @@ void Function::unroll(unsigned k) {
           };
 
           store(bb_val, val);
-          for (auto &[bb, val] : copies) {
-            store(bb, val);
+          for (auto &copy : copies) {
+            store(copy.first, copy.second);
           }
 
           auto load
@@ -727,13 +737,13 @@ void Function::unroll(unsigned k) {
       if (I == phi_preds.end())
         continue;
 
-      for (auto &[phi, val] : I->second) {
-        if (!vmap.count(phi) && !vmap.count(val)) {
+      for (auto &local_instr : I->second) {
+        if (!vmap.count(local_instr.first) && !vmap.count(local_instr.second)) {
           for (auto *dup : bbmap.at(bb)) {
             // already in the phi
             if (dup == bb)
               continue;
-            phi->addValue(*val, string(dup->getName()));
+            local_instr.first->addValue(*local_instr.second, string(dup->getName()));
           }
         }
       }
@@ -854,9 +864,9 @@ void CFG::printDot(ostream &os) const {
   os << "digraph {\n"
         "\"" << bb_dot_name(f.getBBs()[0]->getName()) << "\" [shape=box];\n";
 
-  for (auto [src, dst, instr] : *this) {
-    os << '"' << bb_dot_name(src.getName()) << "\" -> \""
-       << bb_dot_name(dst.getName()) << "\";\n";
+  for (auto p : *this) {
+    os << '"' << bb_dot_name(std::get<0>(p).getName()) << "\" -> \""
+       << bb_dot_name(std::get<1>(p).getName()) << "\";\n";
   }
   os << "}\n";
 }
@@ -873,8 +883,8 @@ void DomTree::buildDominators(const CFG &cfg) {
   doms.emplace(&f.getSinkBB(), f.getSinkBB()).first->second.order = 0;
 
   // build predecessors relationship
-  for (auto [src, tgt, instr] : cfg) {
-    doms.at(&tgt).preds.push_back(&doms.at(&src));
+  for (auto p : cfg) {
+    doms.at(&std::get<1>(p)).preds.push_back(&doms.at(&std::get<0>(p)));
   }
 
   auto &entry = doms.at(&f.getFirstBB());
@@ -962,7 +972,9 @@ void LoopAnalysis::getDepthFirstSpanningTree() {
   vector<pair<BasicBlock*, bool>> worklist = { {&f.getFirstBB(), false} };
   unordered_set<const BasicBlock *> visited;
   while(!worklist.empty()) {
-    auto &[bb, flag] = worklist.back();
+    auto &entry = worklist.back();
+    auto &bb = std::get<0>(entry);
+    auto &flag = std::get<1>(entry);
     if (flag) {
       last[number[bb]] = current - 1;
       worklist.pop_back();
@@ -996,7 +1008,9 @@ void LoopAnalysis::run() {
   header.resize(bb_count, 0);
   type.resize(bb_count, NodeType::nonheader);
 
-  for (auto [src, dst, instr] : cfg) {
+  for (auto p : cfg) {
+    auto &src = std::get<0>(p);
+    auto &dst = std::get<1>(p);
     unsigned v = number.at(&src), w = number.at(&dst);
     if (isAncestor(w, v))
       backPreds[w].insert(v);
@@ -1071,7 +1085,9 @@ void LoopAnalysis::printDot(ostream &os) const {
     return name;
   };
 
-  for (auto &[root, nodes] : forest) {
+  for (auto &tree : forest) {
+    auto &root = std::get<0>(tree);
+    auto &nodes = std::get<1>(tree);
     auto root_name = decl_root(root);
     for (auto *node : nodes) {
       os << '"' << root_name << "\" -> \""

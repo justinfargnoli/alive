@@ -44,10 +44,12 @@ static void print_single_varval(ostream &os, const State &st, const Model &m,
   }
 
   // Best effort detection of poison if model is partial
-  if (auto v = m.eval(val.non_poison);
-      (v.isFalse() || check_expr(!v).isSat())) {
-    os << "poison";
-    return;
+  {
+    auto v = m.eval(val.non_poison);
+    if (v.isFalse() || check_expr(!v).isSat()) {
+      os << "poison";
+      return;
+    }
   }
 
   if (auto *in = dynamic_cast<const Input*>(var)) {
@@ -140,9 +142,9 @@ static bool error(Errors &errs, const State &src_state, const State &tgt_state,
     set<string> approx;
     for (auto *v : { &src_state.getApproximations(),
                      &tgt_state.getApproximations() }) {
-      for (auto &[msg, var] : *v) {
-        if (!var || m.hasFnModel(*var))
-          approx.emplace(msg);
+      for (auto &t : *v) {
+        if (!t.second || m.hasFnModel(*t.second))
+          approx.emplace(t.first);
       }
     }
 
@@ -164,12 +166,12 @@ static bool error(Errors &errs, const State &src_state, const State &tgt_state,
     s << " for " << *var;
   s << "\n\nExample:\n";
 
-  for (auto &[var, val] : src_state.getValues()) {
-    if (!dynamic_cast<const Input*>(var) &&
-        !dynamic_cast<const ConstantInput*>(var))
+  for (auto &t : src_state.getValues()) {
+    if (!dynamic_cast<const Input*>(t.first) &&
+        !dynamic_cast<const ConstantInput*>(t.first))
       continue;
     s << *var << " = ";
-    print_varval(s, src_state, m, var, var->getType(), val.first);
+    print_varval(s, src_state, m, t.first, t.first->getType(), t.second.first);
     s << '\n';
   }
 
@@ -183,19 +185,19 @@ static bool error(Errors &errs, const State &src_state, const State &tgt_state,
       }
     }
 
-    for (auto &[var, val] : st->getValues()) {
-      auto &name = var->getName();
+    for (auto &t : st->getValues()) {
+      auto &name = t.first->getName();
       if (name == var_name)
         break;
 
       if (name[0] != '%' ||
-          dynamic_cast<const Input*>(var) ||
+          dynamic_cast<const Input*>(t.first) ||
           (check_each_var && !seen_vars.insert(name).second))
         continue;
 
-      s << *var << " = ";
-      print_varval(s, const_cast<State&>(*st), m, var, var->getType(),
-                   val.first);
+      s << *t.first << " = ";
+      print_varval(s, const_cast<State&>(*st), m, t.first, t.first->getType(),
+                   t.second.first);
       s << '\n';
     }
 
@@ -240,11 +242,10 @@ static void instantiate_undef(const Input *in, map<expr, expr> &instances,
       break;
     }
 
-    auto &[e, v] = *I;
     for (unsigned i = 0; i < 2; ++i) {
-      expr newexpr = e.subst(var, nums[i]);
-      if (newexpr.eq(e)) {
-        instances2[move(newexpr)] = move(v);
+      expr newexpr = I->first.subst(var, nums[i]);
+      if (newexpr.eq(I->first)) {
+        instances2[move(newexpr)] = move(I->second);
         break;
       }
 
@@ -253,7 +254,7 @@ static void instantiate_undef(const Input *in, map<expr, expr> &instances,
         continue;
 
       // keep 'var' variables for counterexample printing
-      instances2.try_emplace(move(newexpr), v && var == nums[i]);
+      util::map_try_emplace(instances2, move(newexpr), I->second && var == nums[i]);
     }
   }
   instances = move(instances2);
@@ -297,8 +298,8 @@ static expr preprocess(const Transform &t, const set<expr> &qvars0,
   }
 
   expr insts(false);
-  for (auto &[e, v] : instances) {
-    insts |= expr::mkForAll(qvars, move(const_cast<expr&>(e))) && v;
+  for (auto &t : instances) {
+    insts |= expr::mkForAll(qvars, move(const_cast<expr&>(t.first))) && t.second;
   }
   return insts;
 }
@@ -472,7 +473,8 @@ check_refinement(Errors &errs, const Transform &t, const State &src_state,
     print_varval(s, tgt_state, m, var, type, b);
   };
 
-  auto [poison_cnstr, value_cnstr] = type.refines(src_state, tgt_state, a, b);
+  expr poison_cnstr, value_cnstr;
+  std::tie(poison_cnstr, value_cnstr) = type.refines(src_state, tgt_state, a, b);
   expr dom = dom_a && dom_b;
 
   CHECK(dom && !poison_cnstr,
@@ -488,11 +490,12 @@ check_refinement(Errors &errs, const Transform &t, const State &src_state,
   // 6. Check memory
   auto src_mem = src_state.returnMemory();
   auto tgt_mem = tgt_state.returnMemory();
-  auto [memory_cnstr0, ptr_refinement0, mem_undef]
-    = src_mem.refined(tgt_mem, false);
-  auto &ptr_refinement = ptr_refinement0;
-  qvars.insert(mem_undef.begin(), mem_undef.end());
 
+  const auto p = src_mem.refined(tgt_mem, false);
+  qvars.insert(std::get<2>(p).begin(), std::get<2>(p).end());
+
+  auto ptr_refinement0 = std::get<1>(p);
+  auto &ptr_refinement = ptr_refinement0;
   auto print_ptr_load = [&](ostream &s, const Model &m) {
     set<expr> undef;
     Pointer p(src_mem, m[ptr_refinement()]);
@@ -501,8 +504,8 @@ check_refinement(Errors &errs, const Transform &t, const State &src_state,
       << "\nTarget value: " << Byte(tgt_mem, m[tgt_mem.load(p, undef)()]);
   };
 
-  CHECK(dom && !(memory_cnstr0.isTrue() ? memory_cnstr0
-                                        : value_cnstr && memory_cnstr0),
+  CHECK(dom && !(std::get<0>(p).isTrue() ? std::get<0>(p)
+                                        : value_cnstr && std::get<0>(p)),
         print_ptr_load, "Mismatch in memory");
 
 #undef CHECK
@@ -807,7 +810,7 @@ static void calculateAndInitConstants(Transform &t) {
         uint64_t sz = i->getAttributes().blockSize;
         max_access_size = max(max_access_size, sz);
         min_global_size = min_global_size != UINT64_MAX
-                            ? gcd(sz, min_global_size)
+                            ? util::gcd((long)sz, (long)min_global_size)
                             : sz;
       }
     }
@@ -815,7 +818,7 @@ static void calculateAndInitConstants(Transform &t) {
     auto update_min_vect_sz = [&](const Type &ty) {
       auto elemsz = minVectorElemSize(ty);
       if (min_vect_elem_sz && elemsz)
-        min_vect_elem_sz = gcd(min_vect_elem_sz, elemsz);
+        min_vect_elem_sz = util::gcd((long)min_vect_elem_sz, (long)elemsz);
       else if (elemsz)
         min_vect_elem_sz = elemsz;
     };
@@ -835,7 +838,9 @@ static void calculateAndInitConstants(Transform &t) {
         has_fncall |= true;
 
       if (auto *mi = dynamic_cast<const MemInstr *>(&i)) {
-        auto [alloc, align] = mi->getMaxAllocSize();
+        uint64_t alloc;
+        unsigned align;
+        std::tie(alloc, align) = mi->getMaxAllocSize();
         max_alloc_size   = max(max_alloc_size, alloc);
         max_aligned_size = max(max_aligned_size, add_saturate(alloc, align-1));
         max_access_size  = max(max_access_size, mi->getMaxAccessSize());
@@ -847,7 +852,7 @@ static void calculateAndInitConstants(Transform &t) {
         does_ptr_store       |= info.doesPtrStore;
         does_int_mem_access  |= info.hasIntByteAccess;
         does_mem_access      |= info.doesMemAccess();
-        min_access_size       = gcd(min_access_size, info.byteSize);
+        min_access_size       = util::gcd((long)min_access_size, (long)info.byteSize);
         if (info.doesMemAccess() && !info.hasIntByteAccess &&
             !info.doesPtrLoad && !info.doesPtrStore)
           does_any_byte_access = true;
@@ -869,7 +874,7 @@ static void calculateAndInitConstants(Transform &t) {
 
       } else if (auto *bc = isCast(ConversionOp::BitCast, i)) {
         auto &t = bc->getType();
-        min_access_size = gcd(min_access_size, getCommonAccessSize(t));
+        min_access_size = util::gcd((long)min_access_size, (long)getCommonAccessSize(t));
 
       } else if (auto *ic = dynamic_cast<const ICmp*>(&i)) {
         has_ptr2int |= ic->isPtrCmp() &&
@@ -896,7 +901,7 @@ static void calculateAndInitConstants(Transform &t) {
       auto sz = max(glb->size(), (uint64_t)1u);
       max_access_size = max(sz, max_access_size);
       min_global_size = min_global_size != UINT64_MAX
-                          ? gcd(sz, min_global_size)
+                          ? util::gcd((long)sz, (long)min_global_size)
                           : sz;
     }
   }
@@ -1077,17 +1082,18 @@ Errors TransformVerify::verify() const {
 
   Errors errs;
   try {
-    auto [src_state, tgt_state] = exec();
+    unique_ptr<State> src_state, tgt_state;
+    std::tie(src_state, tgt_state) = exec();
 
     if (check_each_var) {
-      for (auto &[var, val] : src_state->getValues()) {
-        auto &name = var->getName();
-        if (name[0] != '%' || !dynamic_cast<const Instr*>(var))
+      for (auto &stvals : src_state->getValues()) {
+        auto &name = stvals.first->getName();
+        if (name[0] != '%' || !dynamic_cast<const Instr*>(stvals.first))
           continue;
 
         // TODO: add data-flow domain tracking for Alive, but not for TV
-        check_refinement(errs, t, *src_state, *tgt_state, var, var->getType(),
-                         true, true, val,
+        check_refinement(errs, t, *src_state, *tgt_state, stvals.first, stvals.first->getType(),
+                         true, true, stvals.second,
                          true, true, tgt_state->at(*tgt_instrs.at(name)),
                          check_each_var);
         if (errs)
@@ -1221,10 +1227,12 @@ static map<string_view, Instr*> can_remove_init(Function &fn) {
         break;
       }
 
-      if (auto I = users.find(user);
-          I != users.end()) {
-        for (auto &[user, _] : I->second) {
-          worklist.emplace_back(user);
+      {
+        auto I = users.find(user);
+        if (I != users.end()) {
+          for (auto &t : I->second) {
+            worklist.emplace_back(t.first);
+          }
         }
       }
     } while (!worklist.empty());
@@ -1319,20 +1327,20 @@ void Transform::preprocess() {
   // We only remove inits if it's possible to remove from both programs to keep
   // memories syntactically equal
   auto remove_init_tgt = can_remove_init(tgt);
-  for (auto &[name, isrc] : can_remove_init(src)) {
-    auto Itgt = remove_init_tgt.find(name);
+  for (auto &t : can_remove_init(src)) {
+    auto Itgt = remove_init_tgt.find(t.first);
     if (Itgt == remove_init_tgt.end())
       continue;
-    src.getFirstBB().delInstr(isrc);
+    src.getFirstBB().delInstr(t.second);
     tgt.getFirstBB().delInstr(Itgt->second);
     // TODO: check that tgt init refines that of src
   }
 
   // remove constants introduced in target
   auto src_gvs = src.getGlobalVarNames();
-  for (auto &[name, itgt] : remove_init_tgt) {
-    if (find(src_gvs.begin(), src_gvs.end(), name.substr(1)) == src_gvs.end())
-      tgt.getFirstBB().delInstr(itgt);
+  for (auto &t : remove_init_tgt) {
+    if (find(src_gvs.begin(), src_gvs.end(), t.first.substr(1)) == src_gvs.end())
+      tgt.getFirstBB().delInstr(t.second);
   }
 
   // optimize pointer comparisons

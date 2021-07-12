@@ -34,16 +34,16 @@ void Errors::add(AliveException &&e) {
 }
 
 bool Errors::isUnsound() const {
-  for (auto &[msg, unsound] : errs) {
-    if (unsound)
+  for (auto &p : errs) {
+    if (p.second)
       return true;
   }
   return false;
 }
 
 ostream& operator<<(ostream &os, const Errors &errs) {
-  for (auto &[msg, unsound] : errs.errs) {
-    os << "ERROR: " << msg << '\n';
+  for (auto &p : errs.errs) {
+    os << "ERROR: " << p.first << '\n';
   }
   return os;
 }

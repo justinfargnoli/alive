@@ -323,6 +323,7 @@ public:
     const BasicBlock& operator*() const;
     target_iterator& operator++(void) { ++idx; return *this; }
     bool operator==(const target_iterator &rhs) const { return idx == rhs.idx; }
+    bool operator!=(const target_iterator &rhs) const { return !(*this == rhs); }
   };
 
   class it_helper {

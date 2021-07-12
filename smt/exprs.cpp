@@ -103,8 +103,14 @@ static expr simplify(const expr &e, const expr &cond, bool negate) {
       }
       return {};
     };
-    if (auto r = test(a, b); r.isValid()) return r;
-    if (auto r = test(b, a); r.isValid()) return r;
+    {
+      auto r = test(a, b);
+      if (r.isValid()) return r;
+    }
+    {
+      auto r = test(b, a);
+      if (r.isValid()) return r;
+    }
   }
   return e;
 }
@@ -124,13 +130,15 @@ DisjointExpr<expr>::DisjointExpr(const expr &e, unsigned depth_limit) {
     // Limit exponential growth
     if ((worklist.size() + vals.size()) >= 32 ||
         hit_half_memory_limit()) {
-      for (auto &[v, c] : worklist) {
-        add(move(v), move(c));
+      for (auto &t : worklist) {
+        add(move(t.first), move(t.second));
       }
       break;
     }
 
-    auto [v, c] = worklist.back();
+    expr v;
+    expr c;
+    std::tie(v, c) = worklist.back();
     worklist.pop_back();
 
     if (v.isIf(cond, then, els)) {
@@ -145,7 +153,9 @@ DisjointExpr<expr>::DisjointExpr(const expr &e, unsigned depth_limit) {
         continue;
       }
 
-      for (auto &[lhs_v, lhs_domain] : lhs) {
+      for (auto &t : lhs) {
+        expr lhs_v, lhs_domain;
+        std::tie(lhs_v, lhs_domain) = t;
         if (auto rhs_val = rhs.lookup(lhs_domain)) {
           add(lhs_v.concat(*rhs_val), c && lhs_domain);
         } else {
@@ -156,7 +166,9 @@ DisjointExpr<expr>::DisjointExpr(const expr &e, unsigned depth_limit) {
             negate = false;
           }
 
-          for (auto &[rhs_v, rhs_domain] : rhs) {
+          for (auto &t : rhs) {
+            expr rhs_v, rhs_domain;
+            std::tie(rhs_v, rhs_domain) = t;
             add(lhs_v.concat(simplify(rhs_v, from, negate)),
                 c && lhs_domain && rhs_domain);
           }
@@ -170,8 +182,8 @@ DisjointExpr<expr>::DisjointExpr(const expr &e, unsigned depth_limit) {
         continue;
       }
 
-      for (auto &[v, domain] : vals) {
-        add(v.extract(high, low), c && domain);
+      for (auto &t : vals) {
+        add(t.first.extract(high, low), c && t.second);
       }
     }
     else {
@@ -193,10 +205,10 @@ void FunctionExpr::del(const expr &key) {
   fn.erase(key);
 }
 
-optional<expr> FunctionExpr::operator()(const expr &key) const {
-  DisjointExpr disj(default_val);
-  for (auto &[k, v] : fn) {
-    disj.add(v, k == key);
+util::optional<expr> FunctionExpr::operator()(const expr &key) const {
+  DisjointExpr<expr> disj(default_val);
+  for (auto &t : fn) {
+    disj.add(t.second, t.first.cmp_eq(key, true));
   }
   return disj();
 }
@@ -211,12 +223,13 @@ FunctionExpr FunctionExpr::simplify() const {
   if (default_val)
     newfn.default_val = default_val->simplify();
 
-  for (auto &[k, v] : fn) {
-    newfn.add(k.simplify(), v.simplify());
+  for (auto &t : fn) {
+    newfn.add(t.first.simplify(), t.second.simplify());
   }
   return newfn;
 }
 
+#if __cplusplus > 202002L
 weak_ordering FunctionExpr::operator<=>(const FunctionExpr &rhs) const {
   if (auto cmp = fn <=> rhs.fn;
       is_neq(cmp))
@@ -229,11 +242,12 @@ weak_ordering FunctionExpr::operator<=>(const FunctionExpr &rhs) const {
 
   return (bool)default_val <=> (bool)rhs.default_val;
 }
+#endif
 
 ostream& operator<<(ostream &os, const FunctionExpr &f) {
   os << "{\n";
-  for (auto &[k, v] : f) {
-    os << k << ": " << v << '\n';
+  for (auto &t : f) {
+    os << t.first << ": " << t.second << '\n';
   }
   if (f.default_val)
     os << "default: " << *f.default_val << '\n';
