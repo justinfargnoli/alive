@@ -29,7 +29,7 @@ unsigned ilog2_ceil(uint64_t n, bool up_power2) {
 }
 
 bool is_power2(uint64_t n, uint64_t *log) {
-  if (!__has_single_bit(n))
+  if (!details::has_single_bit(n))
     return false;
 
   if (log)

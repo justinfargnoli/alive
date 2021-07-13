@@ -17,7 +17,9 @@
 
 using namespace IR;
 using namespace std;
-using llvm::cast, llvm::dyn_cast, llvm::isa;
+using llvm::cast;
+using llvm::dyn_cast;
+using llvm::isa;
 
 namespace {
 
@@ -238,9 +240,11 @@ Value* make_intconst(uint64_t val, int bits) {
 Value* get_operand(llvm::Value *v,
                    function<Value*(llvm::ConstantExpr*)> constexpr_conv,
                    function<Value*(AggregateValue*)> copy_inserter) {
-  if (auto I = value_cache.find(v);
-      I != value_cache.end())
-    return I->second;
+  {
+    auto I = value_cache.find(v);
+    if (I != value_cache.end())
+      return I->second;
+  }
 
   auto ty = llvm_type2alive(v->getType());
   if (!ty)
