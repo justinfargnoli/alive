@@ -6,7 +6,7 @@
 #include "llvm/Support/CommandLine.h"
 #include <filesystem>
 
-namespace fs = std::__fs::filesystem;
+namespace fs = std::filesystem;
 
 namespace {
 llvm::cl::OptionCategory alive_cmdargs("Alive2 translation validation options");

@@ -262,7 +262,7 @@ llvm::Function *findFunction(llvm::Module &M, const string &FName) {
   for (auto &F : M) {
     if (F.isDeclaration())
       continue;
-    if (FName.compare(F.getName().str()) != 0)
+    if (FName.compare(F.getName()) != 0)
       continue;
     return &F;
   }

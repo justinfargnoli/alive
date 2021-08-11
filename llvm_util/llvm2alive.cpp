@@ -22,9 +22,7 @@ using namespace llvm_util;
 using namespace IR;
 using namespace util;
 using namespace std;
-using llvm::cast;
-using llvm::dyn_cast;
-using llvm::isa;
+using llvm::cast, llvm::dyn_cast, llvm::isa;
 using llvm::LLVMContext;
 
 namespace {
@@ -296,9 +294,7 @@ public:
         auto call2
           = make_unique<FnCall>(Type::voidTy, "", string(call->getFnName()),
                                 FnAttrs(call->getAttributes()));
-        for (auto &pair : call->getArgs()) {
-          auto &arg = get<0>(pair);
-          auto &flags = get<1>(pair);
+        for (auto &[arg, flags] : call->getArgs()) {
           call2->addArg(*arg, ParamAttrs(flags));
         }
         call = move(call2);
@@ -993,9 +989,7 @@ public:
     llvm::SmallVector<pair<unsigned, llvm::MDNode*>, 8> MDs;
     llvm_i.getAllMetadataOtherThanDebugLoc(MDs);
 
-    for (auto &pair : MDs) {
-      auto &ID = get<0>(pair);
-      auto &Node = get<1>(pair);
+    for (auto &[ID, Node] : MDs) {
       switch (ID) {
       case LLVMContext::MD_range:
       {
@@ -1288,9 +1282,7 @@ public:
       unordered_map<llvm::BasicBlock*, unsigned> bb_map;
 
       auto bb_num = [&](llvm::BasicBlock *bb) {
-        auto pair = bb_map.emplace(bb, bbs.size());
-        auto I = get<0>(pair);
-        auto inserted = get<1>(pair);
+        auto [I, inserted] = bb_map.emplace(bb, bbs.size());
         if (inserted) {
           bbs.emplace_back(bb);
           edges.emplace_back();
@@ -1311,9 +1303,7 @@ public:
       }
     }
 
-    for (auto &pair : sorted_bbs) {
-      auto &alive_bb = get<0>(pair);
-      auto &llvm_bb = get<1>(pair);
+    for (auto &[alive_bb, llvm_bb] : sorted_bbs) {
       BB = alive_bb;
       for (auto &i : *llvm_bb) {
         if (auto I = visit(i)) {
@@ -1329,10 +1319,7 @@ public:
     }
 
     // patch phi nodes for recursive defs
-    for (auto &triple : todo_phis) {
-      auto &phi = get<0>(triple);
-      auto &llvm_i = get<1>(triple);
-      auto &idx = get<2>(triple);
+    for (auto &[phi, llvm_i, idx] : todo_phis) {
       auto op = get_operand(llvm_i->getIncomingValue(idx));
       if (!op) {
         error(*llvm_i);

@@ -143,9 +143,7 @@ struct TVLegacyPass final : public llvm::ModulePass {
       TLI = &getAnalysis<llvm::TargetLibraryInfoWrapperPass>().getTLI(F);
     }
 
-    auto pair = fns.try_emplace(F.getName().str());
-    auto I = get<0>(pair);
-    auto first = get<1>(pair);
+    auto [I, first] = fns.try_emplace(F.getName().str());
 
     auto fn = llvm2alive(F, *TLI, first ? vector<string_view>()
                                         : I->second.fn.getGlobalVarNames());
@@ -198,10 +196,7 @@ struct TVLegacyPass final : public llvm::ModulePass {
 
     if (parallelMgr) {
       out_file.flush();
-      auto triple = parallelMgr->limitedFork();
-      auto pid = get<0>(triple);
-      auto osp = get<1>(triple);
-      auto index = get<2>(triple);
+      auto [pid, osp, index] = parallelMgr->limitedFork();
 
       if (pid == -1) {
         perror("fork() failed");
