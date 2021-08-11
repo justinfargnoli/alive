@@ -943,9 +943,8 @@ AggregateType::refines(const State &src_s, const State &tgt_s,
                        const StateValue &src, const StateValue &tgt) const {
   set<expr> poison, value;
   for (unsigned i = 0; i < elements; ++i) {
-    expr p, v;
-    std::tie(p, v) = children[i]->refines(src_s, tgt_s, extract(src, i),
-                                          extract(tgt, i));
+    auto [p, v] = children[i]->refines(src_s, tgt_s, extract(src, i),
+                                       extract(tgt, i));
     poison.insert(move(p));
     value.insert(move(v));
   }
@@ -1439,7 +1438,7 @@ unsigned minVectorElemSize(const Type &t) {
     unsigned val = 0;
     for (unsigned i = 0, e = agg->numElementsConst(); i != e;  ++i) {
       if (auto ch = minVectorElemSize(agg->getChild(i))) {
-        val = val ? util::gcd((long)val, (long)ch) : ch;
+        val = val ? gcd(val, ch) : ch;
       }
     }
     return val;
@@ -1459,7 +1458,7 @@ uint64_t getCommonAccessSize(const IR::Type &ty) {
     uint64_t sz = 1;
     for (unsigned i = 0, e = agg->numElementsConst(); i != e; ++i) {
       auto n = getCommonAccessSize(agg->getChild(i));
-      sz = i == 0 ? n : util::gcd((long long)sz, (long long)n);
+      sz = i == 0 ? n : gcd(sz, n);
     }
     return sz;
   }

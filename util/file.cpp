@@ -4,13 +4,11 @@
 #include "util/file.h"
 #include "util/random.h"
 #include <cstring>
-#if __cplusplus > 202002L
 #include <filesystem>
-#endif
 #include <fstream>
-#include <sys/stat.h>
 
 using namespace std;
+namespace fs = std::filesystem;
 
 namespace util {
 
@@ -31,10 +29,8 @@ file_reader::~file_reader() {
   delete[] buf;
 }
 
-#if __cplusplus > 202002L
-string get_random_filename(const string &dir, const char *extension) {
-  using fs = std::filesystem;
 
+string get_random_filename(const string &dir, const char *extension) {
   // there's a low probability of race here
   auto newname = [&]() { return get_random_str(12) + '.' + extension; };
   fs::path path = fs::path(dir) / newname();
@@ -43,20 +39,5 @@ string get_random_filename(const string &dir, const char *extension) {
   }
   return path;
 }
-#elif __APPLE__
-string get_random_filename(const string &dir, const char *extension) {
-  // FIXME: This is bizarre. Seems like we could use mkstemp and have the OS
-  // build us a globally-unique file path.
-  auto newname = [&]() { return get_random_str(12) + '.' + extension; };
 
-  std::string path = dir + "/" + newname();
-
-  struct stat s;
-  while (stat(path.c_str(), &s) == 0) {
-    path.resize(dir.size() + 1);
-    path += newname();
-  }
-  return path;
-}
-#endif
 }

@@ -65,11 +65,7 @@ struct LoopLikeFunctionApproximator {
   tuple<expr, expr, expr> _loop(IR::State &s, AndExpr &prefix, unsigned i,
                                 unsigned unroll_cnt) {
     bool is_last = i == unroll_cnt - 1;
-    auto t = ith_exec(i, is_last);
-    auto res_i = std::get<0>(t);
-    auto np_i = std::get<1>(t);
-    auto ub_i = std::get<2>(t);
-    auto continue_i = std::get<3>(t);
+    auto [res_i, np_i, ub_i, continue_i] = ith_exec(i, is_last);
     auto ub = ub_i();
     prefix.add(ub_i);
 
@@ -82,10 +78,7 @@ struct LoopLikeFunctionApproximator {
       return { move(res_i), move(np_i), move(ub) };
 
     prefix.add(continue_i);
-    auto t_ = _loop(s, prefix, i + 1, unroll_cnt);
-    auto val_next = std::get<0>(t_);
-    auto np_next = std::get<1>(t_);
-    auto ub_next = std::get<2>(t_);
+    auto [val_next, np_next, ub_next] = _loop(s, prefix, i + 1, unroll_cnt);
     return { expr::mkIf(continue_i, move(val_next), move(res_i)),
              expr::mkIf(continue_i, move(np_next), move(np_i)),
              ub && continue_i.implies(ub_next) };
@@ -684,15 +677,15 @@ StateValue BinOp::toSMT(State &s) const {
                                        const expr&)> zip_op;
   if (vertical_zip) {
     zip_op = [&](auto a, auto ap, auto b, auto bp) {
-      auto t = fn(a, ap, b, bp);
+      auto [v1, v2] = fn(a, ap, b, bp);
       expr non_poison = ap && bp;
-      StateValue sv1(move(t.value), expr(non_poison));
-      return make_pair(move(sv1), StateValue(move(t.non_poison), move(non_poison)));
+      StateValue sv1(move(v1), expr(non_poison));
+      return make_pair(move(sv1), StateValue(move(v2), move(non_poison)));
     };
   } else {
     scalar_op = [&](auto a, auto ap, auto b, auto bp) -> StateValue {
-      auto t = fn(a, ap, b, bp);
-      return { move(t.value), ap && (isDivOrRem() ? expr(true) : bp) && t.non_poison };
+      auto [v, np] = fn(a, ap, b, bp);
+      return { move(v), ap && (isDivOrRem() ? expr(true) : bp) && np };
     };
   }
 
@@ -713,9 +706,8 @@ StateValue BinOp::toSMT(State &s) const {
       for (unsigned i = 0, e = ty->numElementsConst(); i != e; ++i) {
         auto ai = ty->extract(a, i);
         auto bi = ty->extract(b, i);
-        StateValue v1, v2;
-        std::tie(v1, v2) = zip_op(ai.value, ai.non_poison, bi.value,
-                                  bi.non_poison);
+        auto [v1, v2] = zip_op(ai.value, ai.non_poison, bi.value,
+                               bi.non_poison);
         vals1.emplace_back(move(v1));
         vals2.emplace_back(move(v2));
       }
@@ -746,8 +738,7 @@ StateValue BinOp::toSMT(State &s) const {
 
   if (vertical_zip) {
     vector<StateValue> vals;
-    StateValue v1, v2;
-    std::tie(v1, v2) = zip_op(a.value, a.non_poison, b.value, b.non_poison);
+    auto [v1, v2] = zip_op(a.value, a.non_poison, b.value, b.non_poison);
     vals.emplace_back(move(v1));
     vals.emplace_back(move(v2));
     return getType().getAsAggregateType()->aggregateVals(vals);
@@ -1158,14 +1149,14 @@ StateValue TernaryOp::toSMT(State &s) const {
       auto ai = ty->extract(av, i);
       auto bi = ty->extract(bv, i);
       auto ci = ty->extract(cv, i);
-      auto s = fn(ai.value, bi.value, ci.value);
-      vals.emplace_back(move(s.value), ai.non_poison && bi.non_poison &&
-                                 ci.non_poison && s.non_poison);
+      auto [v, np] = fn(ai.value, bi.value, ci.value);
+      vals.emplace_back(move(v), ai.non_poison && bi.non_poison &&
+                                 ci.non_poison && np);
     }
     return ty->aggregateVals(vals);
   }
-  auto s2 = fn(av.value, bv.value, cv.value);
-  return { move(s2.value), av.non_poison && bv.non_poison && cv.non_poison && s2.non_poison };
+  auto [v, np] = fn(av.value, bv.value, cv.value);
+  return { move(v), av.non_poison && bv.non_poison && cv.non_poison && np };
 }
 
 expr TernaryOp::getTypeConstraints(const Function &f) const {
@@ -1291,8 +1282,8 @@ StateValue ConversionOp::toSMT(State &s) const {
   }
 
   auto scalar = [&](StateValue &&sv, const Type &to_type) -> StateValue {
-    auto t = fn(move(sv.value), to_type);
-    return { move(t.value), sv.non_poison && t.non_poison };
+    auto [v, np] = fn(move(sv.value), to_type);
+    return { move(v), sv.non_poison && np };
   };
 
   if (op == BitCast) {
@@ -1623,10 +1614,10 @@ FnCall::ByteAccessInfo FnCall::getByteAccessInfo() const {
     if (attr.has(decay<decltype(attr)>::type::Dereferenceable))        \
       sz = attr.derefBytes;                                            \
     if (attr.has(decay<decltype(attr)>::type::DereferenceableOrNull))  \
-      sz = util::gcd((long long)sz, (long long)attr.derefOrNullBytes); \
+      sz = gcd(sz, attr.derefOrNullBytes);                             \
     /* Without align, nothing is guaranteed about the bytesize */      \
-    sz = util::gcd((long long)sz, (long long)retattr.align);           \
-    bytesize = bytesize ? util::gcd((long long)bytesize, (long long)sz) : sz; \
+    sz = gcd(sz, retattr.align);                                       \
+    bytesize = bytesize ? gcd(bytesize, sz) : sz;                      \
   } while (0)
 
   auto &retattr = getAttributes();
@@ -1681,11 +1672,11 @@ void FnCall::print(ostream &os) const {
   os << "call " << print_type(getType()) << fnName << '(';
 
   bool first = true;
-  for (auto &t : args) {
+  for (auto &[arg, attrs] : args) {
     if (!first)
       os << ", ";
 
-    os << t.second << *t.first;
+    os << attrs << *arg;
     first = false;
   }
   os << ')' << attrs;
@@ -1704,9 +1695,7 @@ static void unpack_inputs(State &s, Value &argv, Type &ty,
   }
 
   auto unpack = [&](StateValue &&value) {
-    smt::AndExpr UB;
-    expr new_non_poison;
-    std::tie(UB, new_non_poison) = argflag.encode(s, value, ty);
+    auto [UB, new_non_poison] = argflag.encode(s, value, ty);
     s.addUB(move(UB));
     value.non_poison = move(new_non_poison);
 
@@ -1744,9 +1733,7 @@ check_return_value(State &s, StateValue &&val, const Type &ty,
     val.non_poison &= !p.isNocapture();
   }
 
-  smt::AndExpr UB;
-  expr new_non_poison;
-  std::tie(UB, new_non_poison) = attrs.encode(s, val, ty);
+  auto [UB, new_non_poison] = attrs.encode(s, val, ty);
   s.addUB(move(UB));
   return { move(val.value), move(new_non_poison) };
 }
@@ -1776,24 +1763,24 @@ StateValue FnCall::toSMT(State &s) const {
 
   ostringstream fnName_mangled;
   fnName_mangled << fnName;
-  for (auto &t : args) {
+  for (auto &[arg, flags] : args) {
     // we duplicate each argument so that undef values are allowed to take
     // different values so we can catch the bug in f(freeze(undef)) -> f(undef)
     StateValue sv, sv2;
-    if (t.second.poisonImpliesUB()) {
-      sv = s.getAndAddPoisonUB(*t.first, t.second.undefImpliesUB());
-      if (t.second.undefImpliesUB())
+    if (flags.poisonImpliesUB()) {
+      sv = s.getAndAddPoisonUB(*arg, flags.undefImpliesUB());
+      if (flags.undefImpliesUB())
         sv2 = sv;
       else
-        sv2 = s.getAndAddPoisonUB(*t.first, false);
+        sv2 = s.getAndAddPoisonUB(*arg, false);
     } else {
-      sv  = s[*t.first];
-      sv2 = s[*t.first];
+      sv  = s[*arg];
+      sv2 = s[*arg];
     }
 
-    unpack_inputs(s, *t.first, t.first->getType(), t.second, move(sv), move(sv2), inputs,
+    unpack_inputs(s, *arg, arg->getType(), flags, move(sv), move(sv2), inputs,
                   ptr_inputs);
-    fnName_mangled << '#' << t.first->getType();
+    fnName_mangled << '#' << arg->getType();
   }
   fnName_mangled << '!' << getType();
   if (!isVoid())
@@ -1927,8 +1914,8 @@ StateValue ICmp::toSMT(State &s) const {
   function<expr(const expr&, const expr&, Cond)> fn =
       [&](auto &av, auto &bv, Cond cond) {
     switch (cond) {
-    case EQ:  return av.cmp_eq(bv, true);
-    case NE:  return av.cmp_neq(bv, true);
+    case EQ:  return av == bv;
+    case NE:  return av != bv;
     case SLE: return av.sle(bv);
     case SLT: return av.slt(bv);
     case SGE: return av.sge(bv);
@@ -2046,9 +2033,9 @@ StateValue FCmp::toSMT(State &s) const {
       }
       UNREACHABLE();
     };
-    auto state = fm_poison(s, a.value, a.non_poison, b.value, b.non_poison,
+    auto [val, np] = fm_poison(s, a.value, a.non_poison, b.value, b.non_poison,
                                cmp, fmath, true);
-    return { state.value.toBVBool(), move(state.non_poison) };
+    return { val.toBVBool(), move(np) };
   };
 
   if (auto agg = a->getType().getAsAggregateType()) {
@@ -2141,16 +2128,16 @@ void Phi::removeValue(const string &BB_name) {
 
 vector<string> Phi::sources() const {
   vector<string> s;
-  for (auto &t : values) {
-    s.emplace_back(t.second);
+  for (auto &[_, bb] : values) {
+    s.emplace_back(bb);
   }
   return s;
 }
 
 void Phi::replaceSourceWith(const string &from, const string &to) {
-  for (auto &t : values) {
-    if (t.second == from) {
-      t.second = to;
+  for (auto &[_, bb] : values) {
+    if (bb == from) {
+      bb = to;
       break;
     }
   }
@@ -2158,22 +2145,22 @@ void Phi::replaceSourceWith(const string &from, const string &to) {
 
 vector<Value*> Phi::operands() const {
   vector<Value*> v;
-  for (auto &t : values) {
-    v.emplace_back(t.first);
+  for (auto &[val, bb] : values) {
+    v.emplace_back(val);
   }
   return v;
 }
 
 void Phi::rauw(const Value &what, Value &with) {
-  for (auto &t : values) {
-    RAUW(t.first);
+  for (auto &[val, bb] : values) {
+    RAUW(val);
   }
 }
 
 void Phi::replace(const string &predecessor, Value &newval) {
-  for (auto &t : values) {
-    if (t.second == predecessor) {
-      t.first = &newval;
+  for (auto &[val, bb] : values) {
+    if (bb == predecessor) {
+      val = &newval;
       break;
     }
   }
@@ -2183,10 +2170,10 @@ void Phi::print(ostream &os) const {
   os << getName() << " = phi " << print_type(getType());
 
   bool first = true;
-  for (auto &t : values) {
+  for (auto &[val, bb] : values) {
     if (!first)
       os << ", ";
-    os << "[ " << t.first->getName() << ", " << t.second << " ]";
+    os << "[ " << val->getName() << ", " << bb << " ]";
     first = false;
   }
 }
@@ -2195,14 +2182,12 @@ StateValue Phi::toSMT(State &s) const {
   DisjointExpr<StateValue> ret(getType().getDummyValue(false));
   map<Value*, StateValue> cache;
 
-  for (auto &t : values) {
+  for (auto &[val, bb] : values) {
     // check if this was a jump from unreachable BB
-    if (auto pre = s.jumpCondFrom(s.getFn().getBB(t.second))) {
-      typename decltype(cache)::iterator I;
-      bool inserted;
-      std::tie(I, inserted) = util::map_try_emplace(cache, t.first);
+    if (auto pre = s.jumpCondFrom(s.getFn().getBB(bb))) {
+      auto [I, inserted] = cache.try_emplace(val);
       if (inserted)
-        I->second = s[*t.first];
+        I->second = s[*val];
       ret.add(I->second, (*pre)());
     }
   }
@@ -2211,16 +2196,16 @@ StateValue Phi::toSMT(State &s) const {
 
 expr Phi::getTypeConstraints(const Function &f) const {
   auto c = Value::getTypeConstraints();
-  for (auto &t : values) {
-    c &= t.first->getType() == getType();
+  for (auto &[val, bb] : values) {
+    c &= val->getType() == getType();
   }
   return c;
 }
 
 unique_ptr<Instr> Phi::dup(const string &suffix) const {
   auto phi = make_unique<Phi>(getType(), getName() + suffix);
-  for (auto &t : values) {
-    phi->addValue(*t.first, string(t.second));
+  for (auto &[val, bb] : values) {
+    phi->addValue(*val, string(bb));
   }
   return phi;
 }
@@ -2308,31 +2293,31 @@ void Switch::replaceTargetWith(const BasicBlock *from, const BasicBlock *to) {
   if (default_target == from)
     default_target = to;
 
-  for (auto &t : targets) {
-    if (t.second == from)
-      t.second = to;
+  for (auto &[_, bb] : targets) {
+    if (bb == from)
+      bb = to;
   }
 }
 
 vector<Value*> Switch::operands() const {
   vector<Value*> ret = { value };
-  for (auto &t : targets) {
-    ret.emplace_back(t.first);
+  for (auto &[val, target] : targets) {
+    ret.emplace_back(val);
   }
   return ret;
 }
 
 void Switch::rauw(const Value &what, Value &with) {
   RAUW(value);
-  for (auto &t : targets) {
-    RAUW(t.first);
+  for (auto &[val, target] : targets) {
+    RAUW(val);
   }
 }
 
 void Switch::print(ostream &os) const {
   os << "switch " << *value << ", label " << default_target->getName() << " [\n";
-  for (auto &t : targets) {
-    os << "    " << *t.first << ", label " << t.second->getName() << '\n';
+  for (auto &[val, target] : targets) {
+    os << "    " << *val << ", label " << target->getName() << '\n';
   }
   os << "  ]";
 }
@@ -2341,12 +2326,12 @@ StateValue Switch::toSMT(State &s) const {
   auto &val = s.getAndAddPoisonUB(*value, true);
   expr default_cond(true);
 
-  for (auto &t : targets) {
-    auto &target = s[*t.first];
+  for (auto &[value_cond, bb] : targets) {
+    auto &target = s[*value_cond];
     assert(target.non_poison.isTrue());
     expr cmp = val.value == target.value;
     default_cond &= !cmp;
-    s.addJump(move(cmp), *t.second);
+    s.addJump(move(cmp), *bb);
   }
 
   s.addJump(move(default_cond), *default_target);
@@ -2364,8 +2349,8 @@ expr Switch::getTypeConstraints(const Function &f) const {
 
 unique_ptr<Instr> Switch::dup(const string &suffix) const {
   auto sw = make_unique<Switch>(*value, *default_target);
-  for (auto &t : targets) {
-    sw->addTarget(*t.first, *t.second);
+  for (auto &[value_cond, bb] : targets) {
+    sw->addTarget(*value_cond, *bb);
   }
   return sw;
 }
@@ -2421,7 +2406,7 @@ StateValue Return::toSMT(State &s) const {
     // LangRef states that return type must be valid operands for bitcasts,
     // which cannot be aggregate type.
     assert(!dynamic_cast<AggregateType *>(&val->getType()));
-    s.addUB(retval.cmp_eq(s[*val_returned]));
+    s.addUB(retval == s[*val_returned]);
   }
 
   s.addReturn(move(retval));
@@ -2484,8 +2469,8 @@ StateValue Assume::toSMT(State &s) const {
     break;
   }
   case IfNonPoison: {
-    auto &st = s[*args[0]];
-    s.addUB(st.non_poison.implies(st.value != 0));
+    auto &[v, np] = s[*args[0]];
+    s.addUB(np.implies(v != 0));
     break;
   }
   case WellDefined:
@@ -2554,7 +2539,7 @@ MemInstr::ByteAccessInfo::get(const Type &t, bool store, unsigned align) {
   info.hasIntByteAccess = t.enforcePtrOrVectorType().isFalse();
   info.doesPtrStore     = ptr_access && store;
   info.doesPtrLoad      = ptr_access && !store;
-  info.byteSize         = util::gcd((long)align, (long)getCommonAccessSize(t));
+  info.byteSize         = gcd(align, getCommonAccessSize(t));
   return info;
 }
 
@@ -2731,13 +2716,11 @@ void Malloc::print(ostream &os) const {
 
 StateValue Malloc::toSMT(State &s) const {
   auto &m = s.getMemory();
-  auto &st = s.getAndAddPoisonUB(*size, true);
+  auto &[sz, np_size] = s.getAndAddPoisonUB(*size, true);
 
   expr nonnull = expr::mkBoolVar("malloc_never_fails");
-  expr p_new, allocated;
-
-  std::tie(p_new, allocated)
-    = m.alloc(st.value, getAlign(), Memory::MALLOC, st.non_poison, nonnull);
+  auto [p_new, allocated]
+    = m.alloc(sz, getAlign(), Memory::MALLOC, np_size, nonnull);
 
   expr nullp = Pointer::mkNullPointer(m)();
   expr ret = expr::mkIf(allocated, p_new, nullp);
@@ -2750,11 +2733,11 @@ StateValue Malloc::toSMT(State &s) const {
       ret = p_new;
     }
   } else {
-    auto &p = s.getAndAddUndefs(*ptr);
-    s.addUB(p.non_poison);
-    check_can_store(s, p.value);
+    auto &[p, np_ptr] = s.getAndAddUndefs(*ptr);
+    s.addUB(np_ptr);
+    check_can_store(s, p);
 
-    Pointer ptr_old(m, p.value);
+    Pointer ptr_old(m, p);
     if (s.getFn().getFnAttrs().has(FnAttrs::NoFree))
       s.addUB(ptr_old.isNull() || ptr_old.isLocal());
 
@@ -2762,7 +2745,7 @@ StateValue Malloc::toSMT(State &s) const {
 
     // 1) realloc(ptr, 0) always free the ptr.
     // 2) If allocation failed, we should not free previous ptr.
-    m.free(expr::mkIf(st.value == 0 || allocated, p.value, nullp), false);
+    m.free(expr::mkIf(sz == 0 || allocated, p, nullp), false);
   }
   return { move(ret), true };
 }
@@ -2797,7 +2780,7 @@ Calloc::ByteAccessInfo Calloc::getByteAccessInfo() const {
   auto info = ByteAccessInfo::intOnly(1);
   if (auto n = getInt(*num))
     if (auto sz = getInt(*size)) {
-      info.byteSize = util::gcd((long)getAlign(), (long)*n * *sz);
+      info.byteSize = gcd(getAlign(), *n * *sz);
     }
   return info;
 }
@@ -2822,16 +2805,15 @@ void Calloc::print(ostream &os) const {
 }
 
 StateValue Calloc::toSMT(State &s) const {
-  auto &n = s.getAndAddPoisonUB(*num, true);
-  auto &st = s.getAndAddPoisonUB(*size, true);
+  auto &[nm, np_num] = s.getAndAddPoisonUB(*num, true);
+  auto &[sz, np_sz] = s.getAndAddPoisonUB(*size, true);
 
-  auto np = n.non_poison && st.non_poison;
-  expr size = n.value * st.value;
+  auto np = np_num && np_sz;
+  expr size = nm * sz;
   expr nonnull = expr::mkBoolVar("malloc_never_fails");
   auto &m = s.getMemory();
-  expr p, allocated;
-  std::tie(p, allocated) = m.alloc(size, getAlign(), Memory::MALLOC,
-                                   np && n.value.mul_no_uoverflow(st.value), nonnull);
+  auto [p, allocated] = m.alloc(size, getAlign(), Memory::MALLOC,
+                                np && nm.mul_no_uoverflow(sz), nonnull);
 
   m.memset(p, { expr::mkUInt(0, 8), true }, size, getAlign(), {}, false);
 
@@ -2948,36 +2930,36 @@ static unsigned off_used_bits(const Value &v) {
 
 uint64_t GEP::getMaxGEPOffset() const {
   uint64_t off = 0;
-  for (auto &p : getIdxs()) {
-    if (p.first == 0)
+  for (auto &[mul, v] : getIdxs()) {
+    if (mul == 0)
       continue;
-    if (p.first >= INT64_MAX)
+    if (mul >= INT64_MAX)
       return UINT64_MAX;
 
-    if (auto n = getInt(*p.second)) {
-      off = add_saturate(off, abs((int64_t)p.first * *n));
+    if (auto n = getInt(*v)) {
+      off = add_saturate(off, abs((int64_t)mul * *n));
       continue;
     }
 
     off = add_saturate(off,
-                       mul_saturate(p.first,
-                                    UINT64_MAX >> (64 - off_used_bits(*p.second))));
+                       mul_saturate(mul,
+                                    UINT64_MAX >> (64 - off_used_bits(*v))));
   }
   return off;
 }
 
 vector<Value*> GEP::operands() const {
   vector<Value*> v = { ptr };
-  for (auto &t : idxs) {
-    v.emplace_back(t.second);
+  for (auto &[sz, idx] : idxs) {
+    v.emplace_back(idx);
   }
   return v;
 }
 
 void GEP::rauw(const Value &what, Value &with) {
   RAUW(ptr);
-  for (auto &t : idxs) {
-    RAUW(t.second);
+  for (auto &[sz, idx] : idxs) {
+    RAUW(idx);
   }
 }
 
@@ -2987,8 +2969,8 @@ void GEP::print(ostream &os) const {
     os << "inbounds ";
   os << *ptr;
 
-  for (auto &t : idxs) {
-    os << ", " << t.first << " x " << *t.second;
+  for (auto &[sz, idx] : idxs) {
+    os << ", " << sz << " x " << *idx;
   }
 }
 
@@ -3001,14 +2983,15 @@ StateValue GEP::toSMT(State &s) const {
     if (inbounds)
       non_poison.add(ptr.inbounds(true));
 
-    for (auto &p : offsets) {
-      auto multiplier = expr::mkUInt(p.first, bits_for_offset);
-      auto val = p.second.value.sextOrTrunc(bits_for_offset);
+    for (auto &[sz, idx] : offsets) {
+      auto &[v, np] = idx;
+      auto multiplier = expr::mkUInt(sz, bits_for_offset);
+      auto val = v.sextOrTrunc(bits_for_offset);
       auto inc = multiplier * val;
 
       if (inbounds) {
-        if (p.first != 0)
-          non_poison.add(val.sextOrTrunc(p.second.value.bits()).cmp_eq(p.second.value, true));
+        if (sz != 0)
+          non_poison.add(val.sextOrTrunc(v.bits()) == v);
         non_poison.add(multiplier.mul_no_soverflow(val));
         non_poison.add(ptr.addNoOverflow(inc));
       }
@@ -3020,7 +3003,7 @@ StateValue GEP::toSMT(State &s) const {
 #endif
 
       ptr += inc;
-      non_poison.add(p.second.non_poison);
+      non_poison.add(np);
 
       if (inbounds)
         non_poison.add(ptr.inbounds());
@@ -3035,11 +3018,11 @@ StateValue GEP::toSMT(State &s) const {
 
     for (unsigned i = 0, e = aty->numElementsConst(); i != e; ++i) {
       vector<pair<unsigned, StateValue>> offsets;
-      for (auto &t : idxs) {
-        if (auto idx_aty = t.second->getType().getAsAggregateType())
-          offsets.emplace_back(t.first, idx_aty->extract(s[*t.second], i));
+      for (auto &[sz, idx] : idxs) {
+        if (auto idx_aty = idx->getType().getAsAggregateType())
+          offsets.emplace_back(sz, idx_aty->extract(s[*idx], i));
         else
-          offsets.emplace_back(t.first, s[*t.second]);
+          offsets.emplace_back(sz, s[*idx]);
       }
       vals.emplace_back(scalar(ptr_isvect ? aty->extract(ptrval, i) :
                                (i == 0 ? ptrval : s[*ptr]), offsets));
@@ -3047,8 +3030,8 @@ StateValue GEP::toSMT(State &s) const {
     return getType().getAsAggregateType()->aggregateVals(vals);
   }
   vector<pair<unsigned, StateValue>> offsets;
-  for (auto &t : idxs)
-    offsets.emplace_back(t.first, s[*t.second]);
+  for (auto &[sz, idx] : idxs)
+    offsets.emplace_back(sz, s[*idx]);
   return scalar(s[*ptr], offsets);
 }
 
@@ -3056,18 +3039,18 @@ expr GEP::getTypeConstraints(const Function &f) const {
   auto c = Value::getTypeConstraints() &&
            getType().enforceVectorTypeIff(ptr->getType()) &&
            getType().enforcePtrOrVectorType();
-  for (auto &t : idxs) {
+  for (auto &[sz, idx] : idxs) {
     // It is allowed to have non-vector idx with vector pointer operand
-    c &= t.second->getType().enforceIntOrVectorType() &&
-          getType().enforceVectorTypeIff(t.second->getType());
+    c &= idx->getType().enforceIntOrVectorType() &&
+          getType().enforceVectorTypeIff(idx->getType());
   }
   return c;
 }
 
 unique_ptr<Instr> GEP::dup(const string &suffix) const {
   auto dup = make_unique<GEP>(getType(), getName() + suffix, *ptr, inbounds);
-  for (auto &t : idxs) {
-    dup->addIdx(t.first, *t.second);
+  for (auto &[sz, idx] : idxs) {
+    dup->addIdx(sz, *idx);
   }
   return dup;
 }
@@ -3101,9 +3084,9 @@ void Load::print(ostream &os) const {
 StateValue Load::toSMT(State &s) const {
   auto &p = s.getAndAddPoisonUB(*ptr, true).value;
   check_can_load(s, p);
-  auto t = s.getMemory().load(p, getType(), align);
-  s.addUB(move(t.second));
-  return t.first;
+  auto [sv, ub] = s.getMemory().load(p, getType(), align);
+  s.addUB(move(ub));
+  return sv;
 }
 
 expr Load::getTypeConstraints(const Function &f) const {
@@ -3177,7 +3160,7 @@ uint64_t Memset::getMaxAccessSize() const {
 Memset::ByteAccessInfo Memset::getByteAccessInfo() const {
   unsigned byteSize = 1;
   if (auto bs = getInt(*bytes))
-    byteSize = util::gcd(align, (unsigned long long)*bs);
+    byteSize = gcd(align, *bs);
   return ByteAccessInfo::intOnly(byteSize);
 }
 
@@ -3371,15 +3354,15 @@ void Memcmp::print(ostream &os) const {
 }
 
 StateValue Memcmp::toSMT(State &s) const {
-  auto &vptr1 = s[*ptr1];
-  auto &vptr2 = s[*ptr2];
+  auto &[vptr1, np1] = s[*ptr1];
+  auto &[vptr2, np2] = s[*ptr2];
   auto &vnum = s.getAndAddPoisonUB(*num).value;
-  s.addUB((vnum != 0).implies(vptr1.non_poison && vptr2.non_poison));
+  s.addUB((vnum != 0).implies(np1 && np2));
 
-  check_can_load(s, vptr1.value);
-  check_can_load(s, vptr2.value);
+  check_can_load(s, vptr1);
+  check_can_load(s, vptr2);
 
-  Pointer p1(s.getMemory(), vptr1.value), p2(s.getMemory(), vptr2.value);
+  Pointer p1(s.getMemory(), vptr1), p2(s.getMemory(), vptr2);
   // memcmp can be optimized to load & icmps, and it requires this
   // dereferenceability check of vnum.
   s.addUB(p1.isDereferenceable(vnum, 1, false));
@@ -3407,10 +3390,8 @@ StateValue Memcmp::toSMT(State &s) const {
 
   auto ith_exec =
       [&, this](unsigned i, bool is_last) -> tuple<expr, expr, AndExpr, expr> {
-    StateValue val1, val2;
-    AndExpr ub1, ub2;
-    std::tie(val1, ub1) = s.getMemory().load((p1 + i)(), IntType("i8", 8), 1);
-    std::tie(val2, ub2) = s.getMemory().load((p2 + i)(), IntType("i8", 8), 1);
+    auto [val1, ub1] = s.getMemory().load((p1 + i)(), IntType("i8", 8), 1);
+    auto [val2, ub2] = s.getMemory().load((p2 + i)(), IntType("i8", 8), 1);
 
     AndExpr ub_and;
     ub_and.add(move(ub1));
@@ -3424,14 +3405,14 @@ StateValue Memcmp::toSMT(State &s) const {
       result_neq = expr::mkIf(pos, result_var, result_var_neg);
     }
 
-    auto val_eq = val1.value.cmp_eq(val2.value, true);
+    auto val_eq = val1.value == val2.value;
     return { expr::mkIf(val_eq, zero, result_neq),
              val1.non_poison && val2.non_poison,
              move(ub_and),
              val_eq && vn.uge(i + 2) };
   };
-  expr val, np, ub;
-  std::tie(val, np, ub) = LoopLikeFunctionApproximator(ith_exec).encode(s, memcmp_unroll_cnt);
+  auto [val, np, ub]
+    = LoopLikeFunctionApproximator(ith_exec).encode(s, memcmp_unroll_cnt);
   s.addUB((vnum != 0).implies(move(ub)));
   return { expr::mkIf(vnum == 0, zero, move(val)), (vnum != 0).implies(np) };
 }
@@ -3481,17 +3462,14 @@ StateValue Strlen::toSMT(State &s) const {
 
   auto ith_exec =
       [&s, &p, &ty](unsigned i, bool _) -> tuple<expr, expr, AndExpr, expr> {
-    StateValue val;
-    AndExpr ub_load;
-    std::tie(val, ub_load) = s.getMemory().load((p + i)(), IntType("i8", 8), 1);
     AndExpr ub;
+    auto [val, ub_load] = s.getMemory().load((p + i)(), IntType("i8", 8), 1);
     ub.add(move(ub_load));
     ub.add(move(val.non_poison));
     return { expr::mkUInt(i, ty.bits()), true, move(ub), val.value != 0 };
   };
-
-  expr val, ub;
-  std::tie(val, std::ignore, ub) = LoopLikeFunctionApproximator(ith_exec).encode(s, strlen_unroll_cnt);
+  auto [val, _, ub]
+    = LoopLikeFunctionApproximator(ith_exec).encode(s, strlen_unroll_cnt);
   s.addUB(move(ub));
   return { move(val), true };
 }
@@ -3530,13 +3508,13 @@ StateValue VaStart::toSMT(State &s) const {
 
   // just in case there's already a pointer there
   OrExpr matched_one;
-  for (auto &entry : data) {
+  for (auto &[ptr, entry] : data) {
     // FIXME. if entry.alive => memory leak (though not UB). detect this
-    expr eq = entry.first == raw_p;
-    entry.second.alive      |= eq;
-    entry.second.next_arg    = expr::mkIf(eq, zero, entry.second.next_arg);
-    entry.second.num_args    = expr::mkIf(eq, num_args, entry.second.num_args);
-    entry.second.is_va_start = expr::mkIf(eq, true, entry.second.is_va_start);
+    expr eq = ptr == raw_p;
+    entry.alive      |= eq;
+    entry.next_arg    = expr::mkIf(eq, zero, entry.next_arg);
+    entry.num_args    = expr::mkIf(eq, num_args, entry.num_args);
+    entry.is_va_start = expr::mkIf(eq, true, entry.is_va_start);
     matched_one.add(move(eq));
   }
 
@@ -3545,8 +3523,8 @@ StateValue VaStart::toSMT(State &s) const {
   s.addUB(ptr.blockSize().uge(4)); // FIXME: this is target dependent
 
   // alive, next_arg, num_args, is_va_start, active
-  util::map_try_emplace(data, raw_p, expr(true), move(zero), move(num_args), expr(true),
-                        !matched_one());
+  data.try_emplace(raw_p, expr(true), move(zero), move(num_args), expr(true),
+                   !matched_one());
 
   return {};
 }
@@ -3575,8 +3553,8 @@ void VaEnd::print(ostream &os) const {
 template <typename D>
 static void ensure_varargs_ptr(D &data, State &s, const expr &arg_ptr) {
   OrExpr matched_one;
-  for (auto &p : data) {
-    matched_one.add(p.first.cmp_eq(arg_ptr, true));
+  for (auto &[ptr, entry] : data) {
+    matched_one.add(ptr == arg_ptr);
   }
 
   expr matched = matched_one();
@@ -3588,12 +3566,12 @@ static void ensure_varargs_ptr(D &data, State &s, const expr &arg_ptr) {
   s.addUB(matched || !Pointer(s.getMemory(), arg_ptr).isLocal());
 
   expr zero = expr::mkUInt(0, VARARG_BITS);
-  ENSURE(util::map_try_emplace(data, arg_ptr,
-                               expr::mkUF("vararg_alive", { arg_ptr }, false),
-                               expr(zero), // = next_arg
-                               expr::mkUF("vararg_num_args", { arg_ptr }, zero),
-                               expr(false), // = is_va_start
-                               !matched).second);
+  ENSURE(data.try_emplace(arg_ptr,
+                          expr::mkUF("vararg_alive", { arg_ptr }, false),
+                          expr(zero), // = next_arg
+                          expr::mkUF("vararg_num_args", { arg_ptr }, zero),
+                          expr(false), // = is_va_start
+                          !matched).second);
 }
 
 StateValue VaEnd::toSMT(State &s) const {
@@ -3604,10 +3582,10 @@ StateValue VaEnd::toSMT(State &s) const {
 
   ensure_varargs_ptr(data, s, raw_p);
 
-  for (auto &p : data) {
-    expr eq = p.first.cmp_eq(raw_p, true);
-    s.addUB((eq && p.second.active).implies(p.second.alive));
-    p.second.alive &= !eq;
+  for (auto &[ptr, entry] : data) {
+    expr eq = ptr == raw_p;
+    s.addUB((eq && entry.active).implies(entry.alive));
+    entry.alive &= !eq;
   }
   return {};
 }
@@ -3643,21 +3621,21 @@ StateValue VaCopy::toSMT(State &s) const {
 
   s.addUB(dst.isBlockAlive());
   s.addUB(src.isBlockAlive());
-  s.addUB(dst.blockSize().cmp_eq(src.blockSize(), true));
+  s.addUB(dst.blockSize() == src.blockSize());
 
   ensure_varargs_ptr(data, s, src_raw);
 
   DisjointExpr<expr> next_arg, num_args, is_va_start;
-  for (auto &p : data) {
-    expr select = p.second.active && p.first == src_raw;
-    s.addUB(select.implies(p.second.alive));
+  for (auto &[ptr, entry] : data) {
+    expr select = entry.active && ptr == src_raw;
+    s.addUB(select.implies(entry.alive));
 
-    next_arg.add(p.second.next_arg, select);
-    num_args.add(p.second.num_args, select);
-    is_va_start.add(p.second.is_va_start, move(select));
+    next_arg.add(entry.next_arg, select);
+    num_args.add(entry.num_args, select);
+    is_va_start.add(entry.is_va_start, move(select));
 
     // kill aliases
-    p.second.active &= p.first != dst_raw;
+    entry.active &= ptr != dst_raw;
   }
 
   // FIXME: dst should be empty or we have a mem leak
@@ -3701,26 +3679,26 @@ StateValue VaArg::toSMT(State &s) const {
   expr value_kind = getType().getDummyValue(false).value;
   expr one = expr::mkUInt(1, VARARG_BITS);
 
-  for (auto &p : data) {
+  for (auto &[ptr, entry] : data) {
     string type = getType().toString();
     string arg_name = "va_arg_" + type;
     string arg_in_name = "va_arg_in_" + type;
     StateValue val = {
-      expr::mkIf(p.second.is_va_start,
-                 expr::mkUF(arg_name.c_str(), { p.second.next_arg }, value_kind),
-                 expr::mkUF(arg_in_name.c_str(), { p.first, p.second.next_arg },
+      expr::mkIf(entry.is_va_start,
+                 expr::mkUF(arg_name.c_str(), { entry.next_arg }, value_kind),
+                 expr::mkUF(arg_in_name.c_str(), { ptr, entry.next_arg },
                             value_kind)),
-      expr::mkIf(p.second.is_va_start,
-                 expr::mkUF("va_arg_np", { p.second.next_arg }, true),
-                 expr::mkUF("va_arg_np_in", { p.first, p.second.next_arg }, true))
+      expr::mkIf(entry.is_va_start,
+                 expr::mkUF("va_arg_np", { entry.next_arg }, true),
+                 expr::mkUF("va_arg_np_in", { ptr, entry.next_arg }, true))
     };
-    expr eq = p.first.cmp_eq(raw_p, true);
-    expr select = p.second.active && eq;
+    expr eq = ptr == raw_p;
+    expr select = entry.active && eq;
     ret.add(move(val), select);
 
-    expr next_arg = p.second.next_arg + one;
-    s.addUB(select.implies(p.second.alive && p.second.num_args.uge(next_arg)));
-    p.second.next_arg = expr::mkIf(eq, next_arg, p.second.next_arg);
+    expr next_arg = entry.next_arg + one;
+    s.addUB(select.implies(entry.alive && entry.num_args.uge(next_arg)));
+    entry.next_arg = expr::mkIf(eq, next_arg, entry.next_arg);
   }
 
   return *ret();
@@ -3750,11 +3728,11 @@ void ExtractElement::print(ostream &os) const {
 }
 
 StateValue ExtractElement::toSMT(State &s) const {
-  auto &si = s[*idx];
+  auto &[iv, ip] = s[*idx];
   auto vty = static_cast<const VectorType*>(v->getType().getAsAggregateType());
-  expr inbounds = si.value.ult(vty->numElementsConst());
-  auto ri = vty->extract(s[*v], si.value);
-  return { move(ri.value), si.non_poison && inbounds && ri.non_poison };
+  expr inbounds = iv.ult(vty->numElementsConst());
+  auto [rv, rp] = vty->extract(s[*v], iv);
+  return { move(rv), ip && inbounds && rp };
 }
 
 expr ExtractElement::getTypeConstraints(const Function &f) const {
@@ -3784,11 +3762,11 @@ void InsertElement::print(ostream &os) const {
 }
 
 StateValue InsertElement::toSMT(State &s) const {
-  auto &st = s[*idx];
+  auto &[iv, ip] = s[*idx];
   auto vty = static_cast<const VectorType*>(v->getType().getAsAggregateType());
-  expr inbounds = st.value.ult(vty->numElementsConst());
-  auto r_st = vty->update(s[*v], s[*e], st.value);
-  return { move(r_st.value), expr::mkIf(st.non_poison && inbounds, move(r_st.non_poison),
+  expr inbounds = iv.ult(vty->numElementsConst());
+  auto [rv, rp] = vty->update(s[*v], s[*e], iv);
+  return { move(rv), expr::mkIf(ip && inbounds, move(rp),
                                 vty->getDummyValue(false).non_poison) };
 }
 

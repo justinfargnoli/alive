@@ -92,13 +92,13 @@ static expr get_global(State &s, const string &name, const expr &size,
     if (!allocated) {
       // Use the same block id that is used by src
       assert(!s.isSource());
-      ptr = s.getMemory().alloc(size, align, blkkind, true, true, {}, &bid).first;
+      ptr = s.getMemory().alloc(size, align, blkkind, true, true, bid).first;
       s.markGlobalAsAllocated(name);
     } else {
       ptr = Pointer(s.getMemory(), bid, false).release();
     }
   } else {
-    ptr = s.getMemory().alloc(size, align, blkkind, true, true, {},
+    ptr = s.getMemory().alloc(size, align, blkkind, true, true, nullopt,
                               &bid).first;
     s.addGlobalVarBid(name, bid);
   }
@@ -207,8 +207,7 @@ StateValue Input::mkInput(State &s, const Type &ty, unsigned child) const {
 
   auto undef_mask = getUndefVar(ty, child);
   if (undef_mask.isValid()) {
-    expr undef, var;
-    std::tie(undef, var) = ty.mkUndefInput(s, attrs);
+    auto [undef, var] = ty.mkUndefInput(s, attrs);
     if (undef_mask.bits() == 1)
       val = expr::mkIf(undef_mask == 0, val, undef);
     else
@@ -216,9 +215,7 @@ StateValue Input::mkInput(State &s, const Type &ty, unsigned child) const {
     s.addUndefVar(move(var));
   }
 
-  smt::AndExpr UB;
-  expr non_poison;
-  std::tie(UB, non_poison) = attrs.encode(s, {expr(val), expr(true)}, ty);
+  auto [UB, non_poison] = attrs.encode(s, {expr(val), expr(true)}, ty);
   s.addUB(move(UB));
 
   bool never_poison = config::disable_poison_input || attrs.poisonImpliesUB();

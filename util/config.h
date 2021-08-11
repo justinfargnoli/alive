@@ -6,8 +6,7 @@
 #include <string>
 #include <ostream>
 
-namespace util {
-namespace config {
+namespace util::config {
 
 extern bool symexec_print_each_value;
 
@@ -33,5 +32,5 @@ extern unsigned max_offset_bits;
 
 std::ostream &dbg();
 void set_debug(std::ostream &os);
-}
+
 }

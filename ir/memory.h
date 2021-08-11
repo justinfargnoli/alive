@@ -108,23 +108,8 @@ class Memory {
     void computeAccessStats() const;
     static void printStats(std::ostream &os);
 
-#if __cplusplus > 201703L
     auto operator<=>(const AliasSet &rhs) const = default;
-#else
-    bool operator==(const AliasSet& rhs) const {
-        return this->local == rhs.local
-            && this->non_local == rhs.non_local;
-    }
-    bool operator!=(const AliasSet& rhs) const {
-        return !(*this == rhs);
-    }
-    bool operator<(const AliasSet& rhs) const {
-      if (this->local < rhs.local) {
-        return true;
-      }
-      return this->non_local < rhs.non_local;
-    }
-#endif
+
     void print(std::ostream &os) const;
   };
 
@@ -141,27 +126,7 @@ class Memory {
     MemBlock(smt::expr &&val, DataType type)
       : val(std::move(val)), type(type) {}
 
-#if __cplusplus > 201703L
     std::weak_ordering operator<=>(const MemBlock &rhs) const;
-#else
-    bool operator==(const MemBlock& rhs) const {
-        return this->val == rhs.val
-            && this->undef == rhs.undef
-            && this->type == rhs.type;
-    }
-    bool operator!=(const MemBlock& rhs) const {
-        return !(*this == rhs);
-    }
-    bool operator<(const MemBlock& rhs) const {
-      if (this->val < rhs.val) {
-        return true;
-      }
-      if (this->undef < rhs.undef) {
-        return true;
-      }
-      return this->type < rhs.type;
-    }
-#endif
   };
 
   std::vector<MemBlock> non_local_block_val;
@@ -250,28 +215,8 @@ public:
   public:
     static CallState mkIf(const smt::expr &cond, const CallState &then,
                           const CallState &els);
-    smt::expr cmp_eq(const CallState &rhs) const;
-#if __cplusplus > 201703L
+    smt::expr operator==(const CallState &rhs) const;
     auto operator<=>(const CallState &rhs) const = default;
-#else
-    bool operator==(const CallState& rhs) const {
-      return this->non_local_block_val == rhs.non_local_block_val
-          && this->non_local_liveness == rhs.non_local_liveness
-          && this->empty == rhs.empty;
-    }
-    bool operator!=(const CallState& rhs) const {
-        return !(*this == rhs);
-    }
-    bool operator<(const CallState& rhs) const {
-      if (this->non_local_block_val < rhs.non_local_block_val) {
-        return true;
-      }
-      if (this->non_local_liveness < rhs.non_local_liveness) {
-        return true;
-      }
-      return this->empty < rhs.empty;
-    }
-#endif
     friend class Memory;
   };
 
@@ -293,30 +238,8 @@ public:
 
     PtrInput(StateValue &&v, unsigned byval, bool nocapture) :
       val(std::move(v)), byval(byval), nocapture(nocapture) {}
-//    [[deprecated]]
-//    smt::expr operator==(const PtrInput &rhs) const;
-    smt::expr cmp_eq(const PtrInput &rhs) const;
-#if __cplusplus > 201703L
+    smt::expr operator==(const PtrInput &rhs) const;
     auto operator<=>(const PtrInput &rhs) const = default;
-#else
-    bool operator==(const PtrInput& rhs) const {
-      return this->val == rhs.val
-          && this->byval == rhs.byval
-          && this->nocapture == rhs.nocapture;
-    }
-    bool operator!=(const PtrInput& rhs) const {
-        return !(*this == rhs);
-    }
-    bool operator<(const PtrInput& rhs) const {
-      if (this->val < rhs.val) {
-        return true;
-      }
-      if (this->byval < rhs.byval) {
-        return true;
-      }
-      return this->nocapture < rhs.nocapture;
-    }
-#endif
   };
 
   smt::expr mkFnRet(const char *name, const std::vector<PtrInput> &ptr_inputs);
@@ -334,7 +257,7 @@ public:
   std::pair<smt::expr, smt::expr> alloc(const smt::expr &size, unsigned align,
       BlockKind blockKind, const smt::expr &precond = true,
       const smt::expr &nonnull = false,
-      util::optional<unsigned> bid = {}, unsigned *bid_out = nullptr);
+      std::optional<unsigned> bid = std::nullopt, unsigned *bid_out = nullptr);
 
   // Start lifetime of a local block.
   void startLifetime(const smt::expr &ptr_local);
@@ -378,80 +301,9 @@ public:
 
   static Memory mkIf(const smt::expr &cond, const Memory &then,
                      const Memory &els);
-#if __cplusplus > 201703L
-  auto operator<=>(const Memory &rhs) const = default;
-#else
-  bool operator==(const Memory& rhs) const {
-      return this->state == rhs.state
-          && this->non_local_block_val == rhs.non_local_block_val
-          && this->local_block_val == rhs.local_block_val
-          && this->non_local_block_liveness == rhs.non_local_block_liveness
-          && this->local_block_liveness == rhs.local_block_liveness
-          && this->local_blk_addr == rhs.local_blk_addr
-          && this->local_blk_size == rhs.local_blk_size
-          && this->local_blk_align == rhs.local_blk_align
-          && this->local_blk_kind == rhs.local_blk_kind
-          && this->non_local_blk_size == rhs.non_local_blk_size
-          && this->non_local_blk_align == rhs.non_local_blk_align
-          && this->non_local_blk_kind == rhs.non_local_blk_kind
-          && this->byval_blks == rhs.byval_blks
-          && this->escaped_local_blks == rhs.escaped_local_blks
-          && this->ptr_alias == rhs.ptr_alias
-          && this->next_nonlocal_bid == rhs.next_nonlocal_bid;
-  }
-  bool operator!=(const Memory& rhs) const {
-      return !(*this == rhs);
-  }
-  bool operator<(const Memory& rhs) const {
-    if (this->state < rhs.state) {
-      return true;
-    }
 
-    if (this->non_local_block_val < rhs.non_local_block_val) {
-      return true;
-    }
-    if (this->local_block_val < rhs.local_block_val) {
-      return true;
-    }
-    if (this->non_local_block_liveness < rhs.non_local_block_liveness) {
-      return true;
-    }
-    if (this->local_block_liveness < rhs.local_block_liveness) {
-      return true;
-    }
-    if (this->local_blk_addr < rhs.local_blk_addr) {
-      return true;
-    }
-    if (this->local_blk_size < rhs.local_blk_size) {
-      return true;
-    }
-    if (this->local_blk_align < rhs.local_blk_align) {
-      return true;
-    }
-    if (this->local_blk_kind < rhs.local_blk_kind) {
-      return true;
-    }
-    if (this->non_local_blk_size < rhs.non_local_blk_size) {
-      return true;
-    }
-    if (this->non_local_blk_align < rhs.non_local_blk_align) {
-      return true;
-    }
-    if (this->non_local_blk_kind < rhs.non_local_blk_kind) {
-      return true;
-    }
-    if (this->byval_blks < rhs.byval_blks) {
-      return true;
-    }
-    if (this->escaped_local_blks < rhs.escaped_local_blks) {
-      return true;
-    }
-    if (this->ptr_alias < rhs.ptr_alias) {
-      return true;
-    }
-    return this->next_nonlocal_bid < rhs.next_nonlocal_bid;
-  }
-#endif
+  auto operator<=>(const Memory &rhs) const = default;
+
   static void printAliasStats(std::ostream &os) {
     AliasSet::printStats(os);
   }

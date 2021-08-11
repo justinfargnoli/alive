@@ -364,12 +364,12 @@ public:
 
 private:
   TypeNum typ = Undefined;
-  util::optional<IntType> i;
-  util::optional<FloatType> f;
-  util::optional<PtrType> p;
-  util::optional<ArrayType> a;
-  util::optional<VectorType> v;
-  util::optional<StructType> s;
+  std::optional<IntType> i;
+  std::optional<FloatType> f;
+  std::optional<PtrType> p;
+  std::optional<ArrayType> a;
+  std::optional<VectorType> v;
+  std::optional<StructType> s;
 
 public:
   SymbolicType(std::string &&name);

@@ -29,8 +29,7 @@ class BasicBlock final {
 
 public:
   BasicBlock(std::string_view name) : name(name) {}
-  BasicBlock(const BasicBlock &) = delete;
-  
+
   const std::string& getName() const { return name; }
 
   smt::expr getTypeConstraints(const Function &f) const;

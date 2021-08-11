@@ -22,7 +22,7 @@ using namespace IR;
 using namespace tools;
 using namespace std;
 
-static_assert(LEXER_READ_AHEAD == PARSER_READ_AHEAD, "");
+static_assert(LEXER_READ_AHEAD == PARSER_READ_AHEAD);
 
 namespace tools {
 
@@ -63,11 +63,9 @@ static Value& get_num_constant(string_view n, Type &t) {
 
 static Value& get_constant(string_view name, Type &type) {
   string id(name);
-  {
-    auto I = identifiers.find(id);
-    if (I != identifiers.end())
-      return *I->second;
-  }
+  if (auto I = identifiers.find(id);
+      I != identifiers.end())
+    return *I->second;
 
   auto c = make_unique<ConstantInput>(type, string(id));
   auto ret = c.get();
@@ -285,23 +283,20 @@ static unsigned sym_num;
 static unsigned struct_num;
 
 static Type& get_overflow_type(Type &type) {
-  auto p = overflow_aggregate_types.find(&type);
-  if (p == overflow_aggregate_types.end()) {
+  auto p = overflow_aggregate_types.try_emplace(&type);
+  auto &st = p.first->second;
+  if (p.second)
     // TODO: Knowing exact layout of { i1, ity } needs data layout.
-    std::tie(p, std::ignore) =
-      overflow_aggregate_types.emplace(&type,
-                                       make_unique<StructType>("structty_" + to_string(struct_num++),
-                                                               initializer_list<Type*>({ &type, int_types[1].get() }),
-                                                               initializer_list<bool>({ false, false })));
-
-  }
-  return *p->second.get();
+    st = make_unique<StructType>("structty_" + to_string(struct_num++),
+           initializer_list<Type*>({ &type, int_types[1].get() }),
+           initializer_list<bool>({ false, false }));
+  return *st.get();
 }
 
 static Type& get_sym_type() {
   // NOTE: don't reuse sym_types across transforms or printing is messed up
-  sym_types.emplace_back(make_unique<SymbolicType>("symty_" + to_string(sym_num++)));
-  return *sym_types.back().get();
+  return *sym_types.emplace_back(
+    make_unique<SymbolicType>("symty_" + to_string(sym_num++))).get();
 }
 
 static Type& get_int_type(unsigned size) {
@@ -362,10 +357,9 @@ static Type& parse_vector_type() {
   Type &elemTy = parse_scalar_type();
 
   tokenizer.ensure(CSGT);
-  vector_types.emplace_back(
+  return *vector_types.emplace_back(
     make_unique<VectorType>("vty_" + to_string(vector_num++),
-                            elements, elemTy));
-  return *vector_types.back().get();
+                            elements, elemTy)).get();
 }
 
 static Type& parse_array_type();
@@ -397,10 +391,9 @@ static Type& parse_array_type() {
 
   Type &elemTy = parse_type(false);
   tokenizer.ensure(RSQBRACKET);
-  array_types.emplace_back(
+  return *array_types.emplace_back(
           make_unique<ArrayType>("aty_" + to_string(array_num++),
-                                 elements, elemTy));
-  return *array_types.back().get();
+                                  elements, elemTy)).get();
 }
 
 static Type& try_parse_type(Type &default_type) {
@@ -446,11 +439,9 @@ static Value& parse_const_expr(Type &type) {
 static Value& get_or_copy_instr(const string &name) {
   assert(!parse_src);
 
-  {
-    auto I = identifiers.find(name);
-    if (I != identifiers.end())
-      return *I->second;
-  }
+  if (auto I = identifiers.find(name);
+      I != identifiers.end())
+    return *I->second;
 
   // we need to either copy instruction(s) from src, or it's an error
   auto I_src = identifiers_src.find(name);
@@ -559,11 +550,9 @@ static Value& parse_operand(Type &type) {
   }
   case REGISTER: {
     string id(yylval.str);
-    {
-      auto I = identifiers.find(id);
-      if (I != identifiers.end())
-        return *I->second;
-    }
+    if (auto I = identifiers.find(id);
+        I != identifiers.end())
+      return *I->second;
 
     if (parse_src) {
       auto input = make_unique<Input>(type, string(id));
@@ -1294,8 +1283,7 @@ vector<Transform> parse(string_view buf) {
   yylex_init(buf);
 
   while (!tokenizer.empty()) {
-    ret.emplace_back();
-    auto &t = ret.back();
+    auto &t = ret.emplace_back();
     sym_num = struct_num = 0;
     parse_src = true;
 
@@ -1326,8 +1314,9 @@ vector<Transform> parse(string_view buf) {
     parse_fn(t.tgt);
 
     // copy any missing instruction in tgt from src
-    for (auto &p : identifiers_src) {
-      get_or_copy_instr(p.first);
+    for (auto &[name, val] : identifiers_src) {
+      (void)val;
+      get_or_copy_instr(name);
     }
 
     identifiers.clear();
