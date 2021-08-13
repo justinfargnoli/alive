@@ -49,7 +49,8 @@ void context::initialize() {
 void context::destroy() {
   Z3_params_dec_ref(ctx, no_timeout_param);
   Z3_close_log();
-  Z3_del_context(ctx);
+  // FIXME: Enable this call to not leak `Z3_context`
+  // Z3_del_context(ctx);
 }
 
 }
