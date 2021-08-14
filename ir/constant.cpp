@@ -18,20 +18,20 @@ void Constant::print(ostream &os) const {
 
 
 IntConst::IntConst(Type &type, int64_t val)
-  : Constant(type, to_string(val)), i(val), s() {}
+  : Constant(type, to_string(val)), val(val) {}
 
 IntConst::IntConst(Type &type, string &&val)
-  : Constant(type, string(val)), i(), s(move(val)) {}
+  : Constant(type, string(val)), val(move(val)) {}
 
 StateValue IntConst::toSMT(State &s) const {
-  if (auto v = i.getPointer())
+  if (auto v = get_if<int64_t>(&val))
     return { expr::mkInt(*v, bits()), true };
-  return { expr::mkInt(this->s.getPointer()->c_str(), bits()), true };
+  return { expr::mkInt(get<string>(val).c_str(), bits()), true };
 }
 
 expr IntConst::getTypeConstraints() const {
   unsigned min_bits = 0;
-  if (auto v = i.getPointer())
+  if (auto v = get_if<int64_t>(&val))
     min_bits = (*v >= 0 ? 63 : 64) - num_sign_bits(*v);
 
   return Value::getTypeConstraints() &&
@@ -41,13 +41,13 @@ expr IntConst::getTypeConstraints() const {
 
 
 FloatConst::FloatConst(Type &type, double val)
-  : Constant(type, to_string(val)), d(val), i(), s() {}
+  : Constant(type, to_string(val)), val(val) {}
 
 FloatConst::FloatConst(Type &type, uint64_t val)
-  : Constant(type, to_string(val)), d(), i(val), s() {}
+  : Constant(type, to_string(val)), val(val) {}
 
 FloatConst::FloatConst(Type &type, string val)
-  : Constant(type, string(val)), d(), i(), s(move(val)) {}
+  : Constant(type, string(val)), val(move(val)) {}
 
 expr FloatConst::getTypeConstraints() const {
   return Value::getTypeConstraints() &&
@@ -55,18 +55,18 @@ expr FloatConst::getTypeConstraints() const {
 }
 
 StateValue FloatConst::toSMT(State &s) const {
-  if (auto n = i.getPointer()) {
+  if (auto n = get_if<uint64_t>(&val)) {
     return { expr::mkUInt(*n, getType().bits())
                .BV2float(getType().getDummyValue(true).value),
              true };
   }
 
-  if (auto n = this->s.getPointer())
+  if (auto n = get_if<string>(&val))
     return { expr::mkNumber(n->c_str(), getType().getDummyValue(true).value),
              true };
 
   expr e;
-  double v = *d.getPointer();
+  double v = get<double>(val);
   switch (getType().getAsFloatType()->getFpType()) {
   case FloatType::Half:    e = expr::mkHalf((float)v); break;
   case FloatType::Float:   e = expr::mkFloat((float)v); break;
@@ -109,28 +109,27 @@ ConstantBinOp::ConstantBinOp(Type &type, Constant &lhs, Constant &rhs, Op op)
 static void div_ub(const expr &a, const expr &b, State &s, bool sign) {
   s.addPre(b != 0);
   if (sign)
-    s.addPre(a.cmp_neq(expr::IntSMin(b.bits()), true)
-             || b.cmp_neq(-1, true));
+    s.addPre(a != expr::IntSMin(b.bits()) || b != -1);
 }
 
 StateValue ConstantBinOp::toSMT(State &s) const {
-  auto &va = s[lhs];
-  auto &vb = s[rhs];
+  auto &[a, ap] = s[lhs];
+  auto &[b, bp] = s[rhs];
   expr val;
 
   switch (op) {
-  case ADD: val = va.value + vb.value; break;
-  case SUB: val = va.value - vb.value; break;
+  case ADD: val = a + b; break;
+  case SUB: val = a - b; break;
   case SDIV:
-    val = va.value.sdiv(vb.value);
-    div_ub(va.value, vb.value, s, true);
+    val = a.sdiv(b);
+    div_ub(a, b, s, true);
     break;
   case UDIV:
-    val = va.value.udiv(vb.value);
-    div_ub(va.value, vb.value, s, false);
+    val = a.udiv(b);
+    div_ub(a, b, s, false);
     break;
   }
-  return { move(val), va.non_poison && vb.non_poison };
+  return { move(val), ap && bp };
 }
 
 expr ConstantBinOp::getTypeConstraints() const {
@@ -176,8 +175,8 @@ StateValue ConstantFn::toSMT(State &s) const {
   expr r;
   switch (fn) {
   case LOG2: {
-    auto &v_st = s[*args[0]];
-    return { v_st.value.log2(bits()), expr(v_st.non_poison) };
+    auto &[v, vp] = s[*args[0]];
+    return { v.log2(bits()), expr(vp) };
   }
   case WIDTH:
     r = args[0]->bits();

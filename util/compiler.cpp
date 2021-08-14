@@ -7,20 +7,22 @@
 
 using namespace std;
 
-namespace details {
+#if defined(__clang__) && __clang_major__ < 13 && defined(__apple_build_version__)
+namespace {
 bool has_single_bit(uint64_t n) {
   return n != 0 && (n & (n - 1)) == 0;
 }
 
 unsigned bit_width(uint64_t n) {
-  return 64 - __builtin_clz(n);
+  return 64 - countl_zero(n);
 }
 }
+#endif
 
 namespace util {
 
 unsigned ilog2(uint64_t n) {
-  return n == 0 ? 0 : details::bit_width(n) - 1;
+  return n == 0 ? 0 : bit_width(n) - 1;
 }
 
 unsigned ilog2_ceil(uint64_t n, bool up_power2) {
@@ -29,7 +31,7 @@ unsigned ilog2_ceil(uint64_t n, bool up_power2) {
 }
 
 bool is_power2(uint64_t n, uint64_t *log) {
-  if (!details::has_single_bit(n))
+  if (!has_single_bit(n))
     return false;
 
   if (log)
@@ -38,18 +40,18 @@ bool is_power2(uint64_t n, uint64_t *log) {
 }
 
 unsigned num_sign_bits(uint64_t n) {
-  return max(__builtin_clz(n), __builtin_clz(~n)) -1;
+  return max(countl_zero(n), countl_one(n)) -1;
 }
 
 uint64_t add_saturate(uint64_t a, uint64_t b) {
   unsigned long res;
-  static_assert(sizeof(res) == sizeof(uint64_t), "");
+  static_assert(sizeof(res) == sizeof(uint64_t));
   return __builtin_uaddl_overflow(a, b, &res) ? UINT64_MAX : res;
 }
 
 uint64_t mul_saturate(uint64_t a, uint64_t b) {
   unsigned long res;
-  static_assert(sizeof(res) == sizeof(uint64_t), "");
+  static_assert(sizeof(res) == sizeof(uint64_t));
   return __builtin_umull_overflow(a, b, &res) ? UINT64_MAX : res;
 }
 

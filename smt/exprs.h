@@ -4,9 +4,7 @@
 // Distributed under the MIT license that can be found in the LICENSE file.
 
 #include "smt/expr.h"
-#include "util/compat.h"
 #include "util/compiler.h"
-#include "util/optional.h"
 #include <cassert>
 #include <compare>
 #include <map>
@@ -53,12 +51,12 @@ public:
 template <typename T>
 class DisjointExpr {
   std::map<T, expr> vals; // val -> domain
-  util::optional<T> default_val;
+  std::optional<T> default_val;
 
 public:
   DisjointExpr() {}
   DisjointExpr(const T &default_val) : default_val(default_val) {}
-  DisjointExpr(const util::optional<T> &default_val) : default_val(default_val){}
+  DisjointExpr(const std::optional<T> &default_val) : default_val(default_val){}
   DisjointExpr(T &&default_val) : default_val(std::move(default_val)) {}
   DisjointExpr(const expr &e, unsigned depth_limit);
 
@@ -69,10 +67,8 @@ public:
     if (domain.isTrue())
       vals.clear();
 
-    typename decltype(vals)::iterator I;
-    bool inserted;
-    std::tie(I, inserted) = util::map_try_emplace(vals, std::forward<V>(val), std::forward<D>(domain));
-
+    auto [I, inserted] = vals.try_emplace(std::forward<V>(val),
+                                          std::forward<D>(domain));
     if (!inserted)
       I->second |= std::forward<D>(domain);
   }
@@ -80,28 +76,26 @@ public:
   template <typename D>
   void add_disj(const DisjointExpr<T> &other, D &&domain) {
     assert(!default_val && !other.default_val);
-    for (auto &t : other.vals) {
-      add(t.first, t.second && std::forward<D>(domain));
+    for (auto &[v, d] : other.vals) {
+      add(v, d && std::forward<D>(domain));
     }
   }
 
-  util::optional<T> operator()() const {
-    util::optional<T> ret;
-    for (auto &t : vals) {
-      expr domain;
-      std::tie(std::ignore, domain) = t;
+  std::optional<T> operator()() const {
+    std::optional<T> ret;
+    for (auto &[val, domain] : vals) {
       if (domain.isTrue())
-        return t.first;
+        return val;
 
-      ret = ret ? T::mkIf(domain, t.first, *ret) : t.first;
+      ret = ret ? T::mkIf(domain, val, *ret) : val;
     }
     return ret ? ret : default_val;
   }
 
-  util::optional<T> lookup(const expr &domain) const {
-    for (auto &t : vals) {
-      if (t.second.eq(domain))
-        return t.first;
+  std::optional<T> lookup(const expr &domain) const {
+    for (auto &[v, d] : vals) {
+      if (d.eq(domain))
+        return v;
     }
     return {};
   }
@@ -123,11 +117,8 @@ public:
   void add(V &&val, D &&domain) {
     if (domain.isFalse())
       return;
-    typename decltype(vals)::iterator I;
-    bool inserted;
-    std::tie(I, inserted) = util::map_try_emplace(vals,
-                                                  std::forward<V>(val),
-                                                  std::forward<D>(domain));
+    auto [I, inserted] = vals.try_emplace(std::forward<V>(val),
+                                          std::forward<D>(domain));
     if (!inserted)
       I->second |= std::forward<D>(domain);
   }
@@ -173,7 +164,7 @@ public:
 
 class FunctionExpr {
   std::map<expr, expr> fn; // key -> val
-  util::optional<expr> default_val;
+  std::optional<expr> default_val;
 
 public:
   FunctionExpr() {}
@@ -182,7 +173,7 @@ public:
   void add(const FunctionExpr &other);
   void del(const expr &key);
 
-  util::optional<expr> operator()(const expr &key) const;
+  std::optional<expr> operator()(const expr &key) const;
   const expr* lookup(const expr &key) const;
 
   FunctionExpr simplify() const;
@@ -191,23 +182,8 @@ public:
   auto end() const { return fn.end(); }
   bool empty() const { return fn.empty() && !default_val; }
 
-#if __cplusplus > 201703L
   std::weak_ordering operator<=>(const FunctionExpr &rhs) const;
-#else
-  bool operator==(const FunctionExpr& rhs) const {
-      return this->fn == rhs.fn
-          && this->default_val == rhs.default_val;
-  }
-  bool operator!=(const FunctionExpr& rhs) const {
-      return !(*this == rhs);
-  }
-  bool operator<(const FunctionExpr& rhs) const {
-    if (this->fn < rhs.fn) {
-      return true;
-    }
-    return this->default_val < rhs.default_val;
-  }
-#endif
+
   friend std::ostream& operator<<(std::ostream &os, const FunctionExpr &e);
 };
 

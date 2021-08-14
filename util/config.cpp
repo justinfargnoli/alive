@@ -8,9 +8,8 @@ using namespace std;
 
 static ostream *debug_os = &cerr;
 
-namespace util {
+namespace util::config {
 
-namespace config {
 bool symexec_print_each_value = false;
 bool skip_smt = false;
 string smt_benchmark_dir;
@@ -28,5 +27,5 @@ ostream &dbg() {
 void set_debug(ostream &os) {
   debug_os = &os;
 }
-}
+
 }

@@ -68,54 +68,14 @@ private:
         num_args(std::move(num_args)), is_va_start(std::move(is_va_start)),
         active(std::move(active)) {}
 
-#if __cplusplus > 201703L
-  auto operator<=>(const VarArgsEntry &rhs) const = default;
-#else
-  bool operator==(const VarArgsEntry& rhs) const {
-    return this->alive == rhs.alive
-        && this->next_arg == rhs.next_arg
-        && this->num_args == rhs.num_args
-        && this->is_va_start == rhs.is_va_start
-        && this->active == rhs.active;
-  }
-  bool operator!=(const VarArgsEntry& rhs) const {
-      return !(*this == rhs);
-  }
-    bool operator<(const VarArgsEntry& rhs) const {
-      if (this->alive < rhs.alive) {
-        return true;
-      }
-      if (this->next_arg < rhs.next_arg) {
-        return true;
-      }
-      if (this->num_args < rhs.num_args) {
-        return true;
-      }
-      if (this->is_va_start < rhs.is_va_start) {
-        return true;
-      }
-      return this->active < rhs.active;
-    }
-#endif
+    auto operator<=>(const VarArgsEntry &rhs) const = default;
   };
 
   struct VarArgsData {
     std::map<smt::expr, VarArgsEntry> data;
     static VarArgsData mkIf(const smt::expr &cond, const VarArgsData &then,
                             const VarArgsData &els);
-  #if __cplusplus > 201703L
     auto operator<=>(const VarArgsData &rhs) const = default;
-  #else
-    bool operator==(const VarArgsData& rhs) const {
-      return this->data == rhs.data;
-    }
-    bool operator!=(const VarArgsData& rhs) const {
-        return !(*this == rhs);
-    }
-    bool operator<(const VarArgsData& rhs) const {
-      return this->data < rhs.data;
-    }
-  #endif
   };
 
   struct BasicBlockInfo {
@@ -134,7 +94,7 @@ private:
   smt::AndExpr precondition;
   smt::AndExpr axioms;
 
-  std::set<std::pair<std::string,util::optional<smt::expr>>> used_approximations;
+  std::set<std::pair<std::string,std::optional<smt::expr>>> used_approximations;
 
   std::set<smt::expr> quantified_vars;
 
@@ -177,46 +137,13 @@ private:
     Memory m;
     bool readsmem, argmemonly;
 
-    smt::expr cmp_eq(const FnCallInput &rhs) const;
-
+    smt::expr operator==(const FnCallInput &rhs) const;
     smt::expr refinedBy(State &s, const std::vector<StateValue> &args_nonptr,
                         const std::vector<Memory::PtrInput> &args_ptr,
                         const ValueAnalysis::FnCallRanges &fncall_ranges,
                         const Memory &m, bool readsmem, bool argmemonly) const;
 
-#if __cplusplus > 201703L
-  auto operator<=>(const FnCallInput &rhs) const = default;
-#else
-  bool operator==(const FnCallInput& rhs) const {
-    return this->args_nonptr == rhs.args_nonptr
-        && this->args_ptr == rhs.args_ptr
-        && this->fncall_ranges == rhs.fncall_ranges
-        && this->m == rhs.m
-        && this->readsmem == rhs.readsmem
-        && this->argmemonly == rhs.argmemonly;
-  }
-  bool operator!=(const FnCallInput& rhs) const {
-      return !(*this == rhs);
-  }
-    bool operator<(const FnCallInput& rhs) const {
-      if (this->args_nonptr < rhs.args_nonptr) {
-        return true;
-      }
-      if (this->args_ptr < rhs.args_ptr) {
-        return true;
-      }
-      if (this->fncall_ranges < rhs.fncall_ranges) {
-        return true;
-      }
-      if (this->m < rhs.m) {
-        return true;
-      }
-      if (this->readsmem < rhs.readsmem) {
-        return true;
-      }
-      return this->argmemonly < rhs.argmemonly;
-    }
-#endif
+    auto operator<=>(const FnCallInput &rhs) const = default;
   };
 
   struct FnCallOutput {
@@ -226,31 +153,8 @@ private:
 
     static FnCallOutput mkIf(const smt::expr &cond, const FnCallOutput &then,
                              const FnCallOutput &els);
-//    [[deprecated]]
-//    smt::expr operator==(const FnCallOutput &rhs) const;
-
-    smt::expr cmp_eq(const FnCallOutput &rhs) const;
-#if __cplusplus > 201703L
+    smt::expr operator==(const FnCallOutput &rhs) const;
     auto operator<=>(const FnCallOutput &rhs) const = default;
-#else
-    bool operator==(const FnCallOutput& rhs) const {
-      return this->retvals == rhs.retvals
-          && this->ub == rhs.ub
-          && this->callstate == rhs.callstate;
-    }
-    bool operator!=(const FnCallOutput& rhs) const {
-        return !(*this == rhs);
-    }
-      bool operator<(const FnCallOutput& rhs) const {
-        if (this->retvals < rhs.retvals) {
-          return true;
-        }
-        if (this->ub < rhs.ub) {
-          return true;
-        }
-        return this->callstate < rhs.callstate;
-      }
-#endif
   };
   std::map<std::string, std::map<FnCallInput, FnCallOutput>> fn_call_data;
   smt::expr fn_call_pre = true;
@@ -300,7 +204,7 @@ public:
 
   auto& getVarArgsData() { return var_args_data.data; }
 
-  void doesApproximation(std::string &&name, util::optional<smt::expr> e = {});
+  void doesApproximation(std::string &&name, std::optional<smt::expr> e = {});
   auto& getApproximations() const { return used_approximations; }
 
   void addQuantVar(const smt::expr &var);

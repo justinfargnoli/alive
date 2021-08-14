@@ -35,7 +35,7 @@ static const YYCTYPE *tag1, *yyt1;
 #endif
 
 /*!max:re2c */
-static_assert(YYMAXFILL <= tools::LEXER_READ_AHEAD, "");
+static_assert(YYMAXFILL <= tools::LEXER_READ_AHEAD);
 
 namespace tools {
 

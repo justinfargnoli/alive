@@ -45,14 +45,9 @@ bool StateValue::isValid() const {
   return value.isValid() && non_poison.isValid();
 }
 
-//expr StateValue::operator==(const StateValue &other) const {
-//  return non_poison == other.non_poison &&
-//         non_poison.implies(value == other.value);
-//}
-
-expr StateValue::cmp_eq(const StateValue &other) const {
-  return non_poison.cmp_eq(other.non_poison, true) &&
-         non_poison.implies(value.cmp_eq(other.value, true));
+expr StateValue::operator==(const StateValue &other) const {
+  return non_poison == other.non_poison &&
+         non_poison.implies(value == other.value);
 }
 
 bool StateValue::eq(const StateValue &other) const {

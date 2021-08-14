@@ -32,10 +32,8 @@ public:
         }
       }
 
-      for (auto it = bb->targets().begin(); it != bb->targets().end(); ++it) {
-        typename decltype(bb_data)::iterator I;
-        bool inserted;
-        std::tie(I, inserted) = bb_data.emplace(&*it, data);
+      for (auto &dst : bb->targets()) {
+        auto [I, inserted] = bb_data.try_emplace(&dst, data);
         if (!inserted) {
           I->second.merge(data);
         }

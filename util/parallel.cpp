@@ -26,8 +26,7 @@ bool parallel::init() {
   assert(parent_pid == -1);
   for (int i = 0; i < max_active_children; ++i) {
     pfd_map.push_back(-1);
-    pfd.emplace_back();
-    auto &p = pfd.back();
+    auto &p = pfd.emplace_back();
     p.fd = -1;
     p.events = POLL_IN;
   }
